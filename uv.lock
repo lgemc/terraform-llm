@@ -1777,6 +1777,8 @@ dependencies = [
     { name = "boto3" },
     { name = "litellm" },
     { name = "openai" },
+    { name = "rich" },
+    { name = "typer" },
 ]
 
 [package.dev-dependencies]
@@ -1795,6 +1797,8 @@ requires-dist = [
     { name = "boto3", specifier = ">=1.26.0" },
     { name = "litellm", specifier = ">=1.0.0" },
     { name = "openai", specifier = ">=1.0.0" },
+    { name = "rich", specifier = ">=13.0.0" },
+    { name = "typer", specifier = ">=0.9.0" },
 ]
 
 [package.metadata.requires-dev]
