@@ -4,7 +4,7 @@ import random
 from typing import List, Dict, Any, Optional, Union, Callable, Tuple
 from collections.abc import Mapping
 
-from .schema import BenchmarkInstance
+from terraform_llm.datasets.schema import BenchmarkInstance
 
 
 class Dataset(Mapping):

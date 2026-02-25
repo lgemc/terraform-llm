@@ -1,18 +1,18 @@
 """Dataset management module for Terraform benchmarks."""
 
-from .schema import (
+from terraform_llm.datasets.schema import (
     BenchmarkInstance,
     InstanceMetadata,
     Difficulty,
     validate_instance
 )
-from .loader import (
+from terraform_llm.datasets.loader import (
     DatasetLoader,
     save_dataset,
     create_instance,
     load_dataset
 )
-from .dataset import Dataset
+from terraform_llm.datasets.dataset import Dataset
 
 __all__ = [
     'BenchmarkInstance',

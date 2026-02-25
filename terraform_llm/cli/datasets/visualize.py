@@ -8,7 +8,7 @@ from rich.table import Table
 from rich.syntax import Syntax
 from rich import box
 
-from ...datasets import DatasetLoader
+from terraform_llm.datasets import DatasetLoader
 
 console = Console()
 

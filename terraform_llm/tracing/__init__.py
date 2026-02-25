@@ -1,5 +1,5 @@
 """Execution tracing for terraform-agent benchmarks."""
 
-from .tracer import ExecutionTracer
+from terraform_llm.tracing.tracer import ExecutionTracer
 
 __all__ = ["ExecutionTracer"]

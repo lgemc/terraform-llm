@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
 
-from .results import StageResult, StageStatus
+from terraform_llm.agent.results import StageResult, StageStatus
 
 logger = logging.getLogger(__name__)
 

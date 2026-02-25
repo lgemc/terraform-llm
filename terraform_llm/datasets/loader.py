@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 from typing import List, Dict, Any, Optional, Iterator, Union
 
-from .schema import BenchmarkInstance, validate_instance
-from .dataset import Dataset
+from terraform_llm.datasets.schema import BenchmarkInstance, validate_instance
+from terraform_llm.datasets.dataset import Dataset
 
 
 class DatasetLoader:
@@ -207,7 +207,7 @@ def create_instance(
     Returns:
         BenchmarkInstance object
     """
-    from .schema import Difficulty, InstanceMetadata
+    from terraform_llm.datasets.schema import Difficulty, InstanceMetadata
 
     metadata = InstanceMetadata(
         estimated_cost=estimated_cost,
