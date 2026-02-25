@@ -174,6 +174,7 @@ class DockerBenchmarkExecutor:
             # Finalize trace
             trace["info"]["total_time_seconds"] = time.time() - start_time
             trace["info"]["passed"] = results["passed"]
+            results["exit_status"] = trace["info"]["exit_status"]
 
             # Save trace
             trace_path = instance_dir / f"{instance_id}.traj.json"

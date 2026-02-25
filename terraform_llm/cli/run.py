@@ -12,7 +12,7 @@ from ..runtime import DockerBenchmarkExecutor, BenchmarkExecutor
 def run_command(
     dataset: str = typer.Argument(
         ...,
-        help="Path to dataset file or folder (e.g., dataset/, examples/sample_dataset.jsonl)"
+        help="Path to dataset file or directory (loads all .jsonl files recursively from directories)"
     ),
     instance_id: Optional[str] = typer.Option(
         None,
@@ -144,6 +144,16 @@ def run_command(
 
     # Load dataset
     try:
+        dataset_path = Path(dataset)
+
+        # Show loading info
+        if dataset_path.is_dir():
+            jsonl_files = sorted(dataset_path.glob("**/*.jsonl"))
+            typer.echo(f"Loading {len(jsonl_files)} dataset file(s) from {dataset}/")
+            if verbose:
+                for f in jsonl_files:
+                    typer.echo(f"  - {f.relative_to(dataset_path.parent)}")
+
         if instance_id:
             # Load single instance
             loader = DatasetLoader(dataset)
@@ -246,7 +256,7 @@ def run_command(
                     region=instance.region,
                     hints=instance.hints,
                 )
-                typer.echo(f"  Generated {len(terraform_code)} file(s)")
+                typer.echo(f"  Generated {len(terraform_code)} file(s): {', '.join(terraform_code.keys())}")
 
             # Execute
             typer.echo("  Executing...")
@@ -263,6 +273,25 @@ def run_command(
             # Print result
             status = "✓ PASSED" if result.get('passed') else "✗ FAILED"
             typer.echo(f"  {status}")
+
+            # Show error details if failed
+            if not result.get('passed'):
+                exit_status = result.get('exit_status', 'Unknown')
+                typer.echo(f"  Exit status: {exit_status}")
+
+                # Show specific error from terraform or validation
+                if result.get('terraform', {}).get('apply', {}).get('returncode', 0) != 0:
+                    typer.echo(f"  Terraform apply failed")
+                elif result.get('validation', {}).get('returncode', 0) != 0:
+                    typer.echo(f"  Validation failed")
+
+                # Show error message
+                if 'error' in result:
+                    error_msg = result['error']
+                    # Truncate long errors unless verbose
+                    if not verbose and len(error_msg) > 100:
+                        error_msg = error_msg[:100] + "..."
+                    typer.echo(f"  Error: {error_msg}")
 
             if 'trace_path' in result and verbose:
                 typer.echo(f"  Trace: {result['trace_path']}")

@@ -16,11 +16,19 @@ class DatasetLoader:
         Initialize dataset loader.
 
         Args:
-            dataset_path: Path to JSONL dataset file
+            dataset_path: Path to JSONL dataset file or directory containing .jsonl files
         """
         self.dataset_path = Path(dataset_path)
         if not self.dataset_path.exists():
             raise FileNotFoundError(f"Dataset not found: {dataset_path}")
+
+        # If directory, collect all .jsonl files
+        if self.dataset_path.is_dir():
+            self.jsonl_files = sorted(self.dataset_path.glob("**/*.jsonl"))
+            if not self.jsonl_files:
+                raise FileNotFoundError(f"No .jsonl files found in directory: {dataset_path}")
+        else:
+            self.jsonl_files = [self.dataset_path]
 
     def load(self, validate: bool = True, return_dataset: bool = True) -> Union[List[BenchmarkInstance], Dataset]:
         """
@@ -141,12 +149,13 @@ class DatasetLoader:
         return None
 
     def _read_jsonl(self) -> Iterator[Dict[str, Any]]:
-        """Read JSONL file line by line."""
-        with open(self.dataset_path, 'r') as f:
-            for line in f:
-                line = line.strip()
-                if line:  # Skip empty lines
-                    yield json.loads(line)
+        """Read JSONL file(s) line by line."""
+        for jsonl_file in self.jsonl_files:
+            with open(jsonl_file, 'r') as f:
+                for line in f:
+                    line = line.strip()
+                    if line:  # Skip empty lines
+                        yield json.loads(line)
 
 
 def save_dataset(instances: List[BenchmarkInstance], output_path: str) -> None:
@@ -232,10 +241,10 @@ def load_dataset(
     **filter_kwargs
 ) -> Union[Dataset, Iterator[BenchmarkInstance]]:
     """
-    Load a dataset from a JSONL file (HuggingFace-like API).
+    Load a dataset from a JSONL file or directory (HuggingFace-like API).
 
     Args:
-        path: Path to JSONL dataset file
+        path: Path to JSONL dataset file or directory (loads all .jsonl files recursively)
         split: Dataset split (e.g., 'train', 'test', 'train[:80%]')
         streaming: If True, return iterator instead of Dataset
         validate: Whether to validate instances against schema
@@ -246,6 +255,7 @@ def load_dataset(
 
     Examples:
         >>> dataset = load_dataset('data/benchmark.jsonl')
+        >>> dataset = load_dataset('dataset/')  # Loads all .jsonl files in directory
         >>> dataset = load_dataset('data/benchmark.jsonl', difficulty='easy')
         >>> splits = load_dataset('data/benchmark.jsonl', split='train[:80%]')
     """

@@ -1,17 +1,106 @@
 """CLI command for reading and displaying traces."""
 
 import json
+import re
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 import typer
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.text import Text
 from rich import box
 
 
 console = Console()
+
+
+def strip_ansi_codes(text: str) -> str:
+    """Strip ANSI escape codes from text."""
+    ansi_escape = re.compile(r'\x1b\[[0-9;]*m')
+    return ansi_escape.sub('', text)
+
+
+def render_output(output: str, title: str = "Output") -> None:
+    """Render output with ANSI codes or as JSON if applicable."""
+    if not output:
+        console.print(f"[dim]{title}: (empty)[/dim]")
+        return
+
+    # Try to parse as JSON first
+    try:
+        json_data = json.loads(output)
+        console.print(Panel(
+            Syntax(json.dumps(json_data, indent=2), "json", theme="monokai"),
+            title=title,
+            border_style="cyan"
+        ))
+        return
+    except (json.JSONDecodeError, ValueError):
+        pass
+
+    # Render with ANSI codes using Rich's Text
+    text = Text.from_ansi(output)
+    console.print(Panel(text, title=title, border_style="cyan"))
+
+
+def display_single_step(step: Dict[str, Any], step_number: int) -> None:
+    """Display a single step with detailed formatting."""
+    step_name = step.get("step", "unknown")
+    status = step.get("status", "unknown")
+    duration = step.get("duration", 0)
+    timestamp = step.get("timestamp", "")
+
+    # Status color
+    status_color = {
+        "success": "green",
+        "passed": "green",
+        "failed": "red",
+        "error": "red",
+    }.get(status, "yellow")
+
+    # Create header
+    header = f"""[bold cyan]Step {step_number}:[/bold cyan] {step_name}
+[bold cyan]Status:[/bold cyan] [{status_color}]{status}[/{status_color}]
+[bold cyan]Duration:[/bold cyan] {duration:.2f}s
+[bold cyan]Timestamp:[/bold cyan] {timestamp}"""
+
+    if "command" in step:
+        header += f"\n[bold cyan]Command:[/bold cyan] {step['command']}"
+
+    console.print(Panel(header, title="Step Details", border_style="cyan"))
+    console.print()
+
+    # Display output if present
+    if "output" in step and step["output"]:
+        render_output(step["output"], "Output")
+        console.print()
+
+    # Display stderr if present
+    if "stderr" in step and step["stderr"]:
+        render_output(step["stderr"], "Stderr")
+        console.print()
+
+    # Display error if present
+    if "error" in step:
+        console.print(Panel(
+            f"[red]{step['error']}[/red]",
+            title="Error",
+            border_style="red"
+        ))
+        console.print()
+
+    # Display additional fields
+    excluded_keys = {"step", "status", "duration", "timestamp", "command", "output", "stderr", "error"}
+    other_fields = {k: v for k, v in step.items() if k not in excluded_keys}
+
+    if other_fields:
+        console.print(Panel(
+            Syntax(json.dumps(other_fields, indent=2), "json", theme="monokai"),
+            title="Additional Fields",
+            border_style="magenta"
+        ))
 
 
 def traces_command(
@@ -28,6 +117,11 @@ def traces_command(
         False,
         "--steps", "-s",
         help="Show execution steps from trace"
+    ),
+    step: Optional[str] = typer.Option(
+        None,
+        "--step",
+        help="Show a specific step by name (e.g., 'terraform_validate') or number (1-indexed)"
     ),
     json_output: bool = typer.Option(
         False,
@@ -54,6 +148,10 @@ def traces_command(
 
         # Show trace with execution steps
         terraform-llm traces traces/2026-02-24_19_41_13/terraform-aws-lambda-vpc-001.json --steps
+
+        # Show specific step with detailed output
+        terraform-llm traces traces/2026-02-24_19_41_13/terraform-aws-lambda-vpc-001.json --step terraform_validate
+        terraform-llm traces traces/2026-02-24_19_41_13/terraform-aws-lambda-vpc-001.json --step 4
     """
     path = Path(trace_path)
 
@@ -81,7 +179,7 @@ def traces_command(
             if path.name == "summary.json" or "summary" in path.stem:
                 display_summary(path, json_output)
             else:
-                display_trace(path, show_messages, show_steps, json_output)
+                display_trace(path, show_messages, show_steps, step, json_output)
 
     except json.JSONDecodeError as e:
         console.print(f"[red]Error: Invalid JSON in {path.name}: {e}[/red]")
@@ -139,7 +237,8 @@ def display_summary(summary_path: Path, json_output: bool = False):
 
 
 def display_trace(trace_path: Path, show_messages: bool = False,
-                  show_steps: bool = False, json_output: bool = False):
+                  show_steps: bool = False, step: Optional[str] = None,
+                  json_output: bool = False):
     """Display individual trace file."""
     with open(trace_path) as f:
         trace = json.load(f)
@@ -170,6 +269,30 @@ def display_trace(trace_path: Path, show_messages: bool = False,
 
     console.print(Panel(header, title="Trace Overview", border_style="cyan"))
     console.print()
+
+    # If --step is specified, show only that step
+    steps = trace.get("steps", [])
+    if step is not None:
+        # Try to parse as number first
+        try:
+            step_num = int(step)
+            if step_num < 1 or step_num > len(steps):
+                console.print(f"[red]Error: Step {step_num} not found. Valid range: 1-{len(steps)}[/red]")
+                raise typer.Exit(code=1)
+            display_single_step(steps[step_num - 1], step_num)
+            return
+        except ValueError:
+            # Not a number, treat as step name
+            for idx, s in enumerate(steps, 1):
+                if s.get("step") == step:
+                    display_single_step(s, idx)
+                    return
+
+            # Step name not found, show available steps
+            available_steps = [s.get("step", "unknown") for s in steps]
+            console.print(f"[red]Error: Step '{step}' not found.[/red]")
+            console.print(f"[yellow]Available steps: {', '.join(available_steps)}[/yellow]")
+            raise typer.Exit(code=1)
 
     # Display problem statement
     if problem_statement:
@@ -202,7 +325,6 @@ def display_trace(trace_path: Path, show_messages: bool = False,
         console.print()
 
     # Display steps if requested
-    steps = trace.get("steps", [])
     if show_steps and steps:
         console.print("[bold cyan]Execution Steps:[/bold cyan]")
         for i, step in enumerate(steps, 1):
