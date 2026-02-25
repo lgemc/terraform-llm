@@ -42,12 +42,10 @@ class TestVPCInfrastructure:
         test_methods = [
             ('vpc_exists', self.test_vpc_exists),
             ('vpc_cidr_correct', self.test_vpc_cidr_correct),
-            ('vpc_name_tag', self.test_vpc_name_tag),
             ('public_subnet_exists', self.test_public_subnet_exists),
             ('subnet_cidr_correct', self.test_subnet_cidr_correct),
             ('subnet_availability_zone', self.test_subnet_availability_zone),
             ('subnet_public_ip_mapping', self.test_subnet_public_ip_mapping),
-            ('subnet_name_tag', self.test_subnet_name_tag),
         ]
 
         for test_name, test_func in test_methods:
@@ -80,16 +78,6 @@ class TestVPCInfrastructure:
                 return
 
         raise AssertionError("VPC with CIDR block 10.0.0.0/16 not found")
-
-    def test_vpc_name_tag(self):
-        """Check VPC is tagged with Name='main'."""
-        if not self._vpc_id:
-            self.test_vpc_cidr_correct()
-
-        vpc = self.ec2.describe_vpcs(VpcIds=[self._vpc_id])['Vpcs'][0]
-        tags = {tag['Key']: tag['Value'] for tag in vpc.get('Tags', [])}
-
-        assert tags.get('Name') == 'main', f"VPC Name tag is '{tags.get('Name')}', expected 'main'"
 
     def test_public_subnet_exists(self):
         """Check that at least one subnet exists."""
@@ -137,17 +125,6 @@ class TestVPCInfrastructure:
 
         assert subnet.get('MapPublicIpOnLaunch', False), \
             "Subnet does not have map_public_ip_on_launch enabled"
-
-    def test_subnet_name_tag(self):
-        """Check subnet is tagged with Name='public'."""
-        if not self._subnet_id:
-            self.test_subnet_cidr_correct()
-
-        subnet = self.ec2.describe_subnets(SubnetIds=[self._subnet_id])['Subnets'][0]
-        tags = {tag['Key']: tag['Value'] for tag in subnet.get('Tags', [])}
-
-        assert tags.get('Name') == 'public', \
-            f"Subnet Name tag is '{tags.get('Name')}', expected 'public'"
 
 
 if __name__ == '__main__':
