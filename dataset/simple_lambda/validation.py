@@ -1,5 +1,6 @@
 """Validation test for simple Lambda infrastructure."""
 
+import os
 import boto3
 from typing import Dict, Any
 
@@ -7,11 +8,18 @@ from typing import Dict, Any
 class TestLambdaInfrastructure:
     """Validate simple Lambda function with IAM role."""
 
-    def __init__(self, region: str = 'us-east-1'):
+    def __init__(self, region: str = 'us-east-1', endpoint_url: str = None):
         """Initialize test with AWS region."""
         self.region = region
-        self.lambda_client = boto3.client('lambda', region_name=region)
-        self.iam = boto3.client('iam', region_name=region)
+        self.endpoint_url = endpoint_url
+
+        # Create boto3 clients with optional endpoint_url for LocalStack
+        client_kwargs = {'region_name': region}
+        if endpoint_url:
+            client_kwargs['endpoint_url'] = endpoint_url
+
+        self.lambda_client = boto3.client('lambda', **client_kwargs)
+        self.iam = boto3.client('iam', **client_kwargs)
         self._function = None
         self._role_name = None
 
@@ -126,3 +134,23 @@ class TestLambdaInfrastructure:
         basic_execution_policy = 'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole'
         assert basic_execution_policy in policy_arns, \
             f"AWSLambdaBasicExecutionRole not attached to role. Attached policies: {policy_arns}"
+
+
+if __name__ == '__main__':
+    """Run validation tests."""
+    import sys
+    import json
+
+    # Get endpoint URL from environment (for LocalStack support)
+    endpoint_url = os.environ.get('AWS_ENDPOINT_URL')
+    region = os.environ.get('AWS_DEFAULT_REGION', 'us-east-1')
+
+    # Run validation
+    validator = TestLambdaInfrastructure(region=region, endpoint_url=endpoint_url)
+    results = validator.validate()
+
+    # Print results as JSON
+    print(json.dumps(results, indent=2))
+
+    # Exit with appropriate code
+    sys.exit(0 if results['passed'] else 1)

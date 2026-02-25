@@ -262,8 +262,29 @@ class TerraformEnvironment:
         )
 
     def run_validation_script(self, script_path: str, timeout: int = 120) -> StageResult:
-        """Run an external validation script and return a StageResult."""
-        result = self.run_command(["bash", script_path], timeout=timeout)
+        """
+        Run an external validation script and return a StageResult.
+
+        Args:
+            script_path: Path to validation script, resolved relative to current working directory
+            timeout: Timeout in seconds
+        """
+        # Resolve script path relative to original cwd, not temp working directory
+        import os
+        original_cwd = Path.cwd()
+        resolved_script = original_cwd / script_path
+
+        if not resolved_script.exists():
+            return StageResult(
+                stage="validation_script",
+                status=StageStatus.ERROR,
+                score=0.0,
+                message=f"Validation script not found: {script_path}",
+                duration_seconds=0.0,
+                raw_output=f"Script path: {resolved_script}",
+            )
+
+        result = self.run_command(["bash", str(resolved_script)], timeout=timeout)
         if result.returncode == 0:
             return StageResult(
                 stage="validation_script",

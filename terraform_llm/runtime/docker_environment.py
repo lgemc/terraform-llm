@@ -39,6 +39,7 @@ class LocalstackDockerEnvironment:
 
         self.network_name = f"terraform-test-{uuid.uuid4().hex[:8]}"
         self.localstack_container_id: Optional[str] = None
+        self.localstack_container_name: Optional[str] = None
         self.terraform_container_id: Optional[str] = None
 
         self._setup_network()
@@ -67,8 +68,8 @@ class LocalstackDockerEnvironment:
         existing = self._find_running_localstack()
 
         if existing:
-            self.localstack_container_id = existing
-            self.logger.info(f"Reusing existing localstack container: {self.localstack_container_id}")
+            self.localstack_container_id, self.localstack_container_name = existing
+            self.logger.info(f"Reusing existing localstack container: {self.localstack_container_id} ({self.localstack_container_name})")
 
             # Connect it to our network if not already connected
             self._connect_to_network(self.localstack_container_id, self.network_name)
@@ -102,23 +103,27 @@ class LocalstackDockerEnvironment:
         )
 
         self.localstack_container_id = result.stdout.strip()
+        self.localstack_container_name = container_name
         self.logger.info(f"Started localstack container: {self.localstack_container_id}")
 
         # Wait for localstack to be ready
         self._wait_for_localstack()
 
-    def _find_running_localstack(self) -> Optional[str]:
-        """Find a running localstack container."""
+    def _find_running_localstack(self) -> Optional[tuple[str, str]]:
+        """Find a running localstack container. Returns (container_id, container_name) or None."""
         result = subprocess.run(
             ["docker", "ps", "--filter", f"ancestor={self.localstack_image}",
-             "--filter", "status=running", "--format", "{{.ID}}"],
+             "--filter", "status=running", "--format", "{{.ID}}\t{{.Names}}"],
             capture_output=True,
             text=True,
             timeout=10,
         )
 
         if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip().split('\n')[0]  # Return first running container
+            line = result.stdout.strip().split('\n')[0]  # Get first running container
+            parts = line.split('\t')
+            if len(parts) == 2:
+                return parts[0], parts[1]
         return None
 
     def _connect_to_network(self, container_id: str, network: str) -> None:
@@ -208,7 +213,7 @@ class LocalstackDockerEnvironment:
             "AWS_ACCESS_KEY_ID": "test",
             "AWS_SECRET_ACCESS_KEY": "test",
             "AWS_DEFAULT_REGION": "us-east-1",
-            "AWS_ENDPOINT_URL": f"http://{self.localstack_container_id}:4566",
+            "AWS_ENDPOINT_URL": f"http://{self.localstack_container_name}:4566",
             # Terraform-specific localstack endpoints
             "TF_VAR_localstack": "true",
         }
@@ -303,7 +308,7 @@ class LocalstackDockerEnvironment:
             "AWS_ACCESS_KEY_ID": "test",
             "AWS_SECRET_ACCESS_KEY": "test",
             "AWS_DEFAULT_REGION": region,
-            "AWS_ENDPOINT_URL": f"http://{self.localstack_container_id}:4566",
+            "AWS_ENDPOINT_URL": f"http://{self.localstack_container_name}:4566",
         }
 
         # Build command to run validation script
