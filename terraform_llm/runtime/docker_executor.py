@@ -1,6 +1,7 @@
 """Docker-based benchmark executor with Localstack and trace storage."""
 
 import json
+import subprocess
 import time
 import traceback
 from pathlib import Path
@@ -48,6 +49,7 @@ class DockerBenchmarkExecutor:
         expected_resources: Dict[str, int],
         problem_statement: str = "",
         cleanup: bool = True,
+        setup_script: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Execute a complete benchmark instance in Docker with trace storage.
@@ -60,6 +62,7 @@ class DockerBenchmarkExecutor:
             expected_resources: Expected resource counts
             problem_statement: Original problem statement
             cleanup: Whether to destroy infrastructure after tests
+            setup_script: Optional path to setup script for pre-existing infrastructure
 
         Returns:
             Dictionary with execution results and trace path
@@ -104,6 +107,25 @@ class DockerBenchmarkExecutor:
                 image=self.terraform_image,
                 localstack_image=self.localstack_image,
             )
+
+            # Run setup script if provided
+            if setup_script:
+                print(f"  Running setup script: {setup_script}")
+                setup_start = time.time()
+                setup_results = self._run_setup_script(docker_env, setup_script, region, trace)
+                results["setup"] = setup_results
+
+                if not setup_results.get("success", False):
+                    print(f"  Setup script failed!")
+                    if "error" in setup_results:
+                        print(f"  Error: {setup_results['error']}")
+                    if "stderr" in setup_results:
+                        print(f"  Stderr: {setup_results['stderr'][:500]}")
+                    results["error"] = "Setup script failed"
+                    trace["info"]["exit_status"] = "SetupFailed"
+                    return results
+                else:
+                    print(f"  Setup script completed in {time.time() - setup_start:.1f}s")
 
             trace["steps"].append({
                 "step": "docker_setup",
@@ -155,6 +177,16 @@ class DockerBenchmarkExecutor:
                     if cleanup:
                         cleanup_result = self._cleanup_terraform(docker_env, trace)
                         results["cleanup"] = cleanup_result
+
+                        # Also cleanup setup script resources if applicable
+                        if setup_script:
+                            cleanup_script_path = Path(setup_script).parent / "cleanup.sh"
+                            if cleanup_script_path.exists():
+                                print("  Running cleanup script for setup resources...")
+                                cleanup_script_result = self._run_cleanup_script(
+                                    docker_env, str(cleanup_script_path), region, trace
+                                )
+                                results["cleanup"]["setup_cleanup"] = cleanup_script_result
 
                     docker_env.cleanup()
                     trace["steps"].append({
@@ -224,6 +256,159 @@ class DockerBenchmarkExecutor:
             working_dir=str(work_dir),
             terraform_code=terraform_code
         )
+
+    def _run_setup_script(
+        self,
+        docker_env: LocalstackDockerEnvironment,
+        setup_script: str,
+        region: str,
+        trace: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Execute setup script for pre-existing infrastructure.
+
+        Args:
+            docker_env: Docker environment
+            setup_script: Path to setup script
+            region: AWS region
+            trace: Execution trace
+
+        Returns:
+            Dictionary with setup results
+        """
+        step_start = time.time()
+        setup_script_path = Path(setup_script)
+
+        if not setup_script_path.exists():
+            error_msg = f"Setup script not found: {setup_script}"
+            trace["steps"].append({
+                "step": "setup_script",
+                "timestamp": time.time(),
+                "duration": time.time() - step_start,
+                "status": "error",
+                "error": error_msg,
+            })
+            return {
+                "success": False,
+                "error": error_msg,
+            }
+
+        # Copy setup script to working directory
+        import shutil
+        work_dir = Path(docker_env.work_dir)
+        setup_script_copy = work_dir / "setup.sh"
+        shutil.copy(setup_script_path, setup_script_copy)
+        print(f"    Copied setup script to {setup_script_copy}")
+
+        # Also copy lambda_code directory if it exists
+        lambda_code_dir = setup_script_path.parent / "lambda_code"
+        if lambda_code_dir.exists():
+            dest_lambda_code_dir = work_dir / "lambda_code"
+            if dest_lambda_code_dir.exists():
+                shutil.rmtree(dest_lambda_code_dir)
+            shutil.copytree(lambda_code_dir, dest_lambda_code_dir)
+            print(f"    Copied lambda_code directory")
+
+        # Execute setup script in a container with Go and AWS CLI
+        # Using a custom image that has both Go and AWS CLI
+        env_vars = {
+            "AWS_DEFAULT_REGION": region,
+            "AWS_REGION": region,
+        }
+
+        # Run the setup script
+        command = "apk add --no-cache aws-cli bash zip && chmod +x /workspace/setup.sh && /bin/bash /workspace/setup.sh"
+
+        # Build docker command similar to execute_terraform_command
+        default_env = {
+            "AWS_ACCESS_KEY_ID": "test",
+            "AWS_SECRET_ACCESS_KEY": "test",
+            "AWS_DEFAULT_REGION": region,
+            "AWS_ENDPOINT_URL": f"http://{docker_env.localstack_container_name}:4566",
+        }
+
+        cmd = [
+            "docker", "run", "--rm",
+            "--network", docker_env.network_name,
+            "-v", f"{work_dir.absolute()}:/workspace",
+            "-w", "/workspace",
+        ]
+
+        for key, value in default_env.items():
+            cmd.extend(["-e", f"{key}={value}"])
+
+        # Use alpine with sh
+        cmd.extend([
+            "golang:alpine",
+            "sh", "-c",
+            command,
+        ])
+
+        print(f"    Executing setup in Docker (timeout: 300s)...")
+        print(f"    Installing: aws-cli, bash, zip, go")
+        print(f"    This may take a few minutes on first run...")
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minute timeout
+            )
+
+            print(f"    Setup script returned code: {result.returncode}")
+
+            # Show some output for debugging
+            if result.stdout:
+                print(f"    Stdout preview: {result.stdout[-200:]}")
+            if result.stderr and result.returncode != 0:
+                print(f"    Stderr preview: {result.stderr[-200:]}")
+
+            success = result.returncode == 0
+
+            trace["steps"].append({
+                "step": "setup_script",
+                "timestamp": time.time(),
+                "duration": time.time() - step_start,
+                "status": "success" if success else "failed",
+                "output": result.stdout,
+                "stderr": result.stderr,
+                "returncode": result.returncode,
+            })
+
+            return {
+                "success": success,
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+
+        except subprocess.TimeoutExpired:
+            error_msg = "Setup script timed out after 5 minutes"
+            trace["steps"].append({
+                "step": "setup_script",
+                "timestamp": time.time(),
+                "duration": time.time() - step_start,
+                "status": "error",
+                "error": error_msg,
+            })
+            return {
+                "success": False,
+                "error": error_msg,
+            }
+        except Exception as e:
+            error_msg = str(e)
+            trace["steps"].append({
+                "step": "setup_script",
+                "timestamp": time.time(),
+                "duration": time.time() - step_start,
+                "status": "error",
+                "error": error_msg,
+            })
+            return {
+                "success": False,
+                "error": error_msg,
+            }
 
     def _run_terraform_workflow(
         self,
@@ -434,6 +619,75 @@ class DockerBenchmarkExecutor:
 
         return validation_result
 
+    def _run_cleanup_script(
+        self,
+        docker_env: LocalstackDockerEnvironment,
+        cleanup_script: str,
+        region: str,
+        trace: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Execute cleanup script for pre-existing infrastructure."""
+        step_start = time.time()
+        cleanup_script_path = Path(cleanup_script)
+
+        if not cleanup_script_path.exists():
+            return {"success": False, "error": "Cleanup script not found"}
+
+        # Copy cleanup script to working directory
+        import shutil
+        work_dir = Path(docker_env.work_dir)
+        cleanup_script_copy = work_dir / "cleanup.sh"
+        shutil.copy(cleanup_script_path, cleanup_script_copy)
+
+        # Build environment
+        default_env = {
+            "AWS_ACCESS_KEY_ID": "test",
+            "AWS_SECRET_ACCESS_KEY": "test",
+            "AWS_DEFAULT_REGION": region,
+            "AWS_ENDPOINT_URL": f"http://{docker_env.localstack_container_name}:4566",
+        }
+
+        cmd = [
+            "docker", "run", "--rm",
+            "--network", docker_env.network_name,
+            "-v", f"{work_dir.absolute()}:/workspace",
+            "-w", "/workspace",
+        ]
+
+        for key, value in default_env.items():
+            cmd.extend(["-e", f"{key}={value}"])
+
+        # Use alpine with bash and aws-cli
+        command = "apk add --no-cache aws-cli bash && chmod +x /workspace/cleanup.sh && /bin/bash /workspace/cleanup.sh"
+        cmd.extend(["alpine:latest", "sh", "-c", command])
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+            trace["steps"].append({
+                "step": "cleanup_script",
+                "timestamp": time.time(),
+                "duration": time.time() - step_start,
+                "status": "success" if result.returncode == 0 else "failed",
+                "output": result.stdout,
+                "stderr": result.stderr,
+            })
+
+            return {
+                "success": result.returncode == 0,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+        except Exception as e:
+            trace["steps"].append({
+                "step": "cleanup_script",
+                "timestamp": time.time(),
+                "duration": time.time() - step_start,
+                "status": "error",
+                "error": str(e),
+            })
+            return {"success": False, "error": str(e)}
+
     def _cleanup_terraform(
         self,
         docker_env: LocalstackDockerEnvironment,
@@ -442,20 +696,48 @@ class DockerBenchmarkExecutor:
         """Destroy Terraform infrastructure."""
         step_start = time.time()
 
-        destroy_result = docker_env.execute_terraform_command("terraform destroy -auto-approve")
+        print("  Running terraform destroy...")
+
+        # Set a shorter timeout for destroy to avoid hanging on LocalStack bugs
+        # Save original timeout and restore after
+        original_timeout = docker_env.timeout
+        docker_env.timeout = 60  # 60 second timeout for destroy
+
+        try:
+            destroy_result = docker_env.execute_terraform_command("terraform destroy -auto-approve")
+        except Exception as e:
+            print(f"  Destroy encountered error (continuing anyway): {e}")
+            destroy_result = {
+                "success": False,
+                "error": str(e),
+                "output": "",
+                "stderr": str(e)
+            }
+        finally:
+            docker_env.timeout = original_timeout
+
+        duration = time.time() - step_start
+
+        if destroy_result.get("success"):
+            print(f"  Terraform destroy completed in {duration:.1f}s")
+        else:
+            print(f"  Terraform destroy failed after {duration:.1f}s (LocalStack cleanup issue)")
+            # Show some error info but don't fail the whole test
+            if "stderr" in destroy_result and destroy_result["stderr"]:
+                print(f"  Destroy stderr (first 300 chars): {destroy_result['stderr'][:300]}")
 
         trace["steps"].append({
             "step": "terraform_destroy",
             "timestamp": time.time(),
-            "duration": time.time() - step_start,
+            "duration": duration,
             "command": "terraform destroy",
-            "status": "success" if destroy_result["success"] else "failed",
+            "status": "success" if destroy_result.get("success") else "failed",
             "output": destroy_result.get("output", ""),
             "stderr": destroy_result.get("stderr", ""),
         })
 
         return {
-            "destroyed": destroy_result["success"],
+            "destroyed": destroy_result.get("success", False),
             "output": destroy_result,
         }
 

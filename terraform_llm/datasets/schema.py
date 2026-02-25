@@ -37,6 +37,7 @@ class BenchmarkInstance:
     required_outputs: List[str] = field(default_factory=list)
     gold_solution: Dict[str, str] = field(default_factory=dict)
     hints: List[str] = field(default_factory=list)
+    setup_script: Optional[str] = None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'BenchmarkInstance':
@@ -55,12 +56,13 @@ class BenchmarkInstance:
             metadata=metadata,
             required_outputs=data.get('required_outputs', []),
             gold_solution=data.get('gold_solution', {}),
-            hints=data.get('hints', [])
+            hints=data.get('hints', []),
+            setup_script=data.get('setup_script')
         )
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert instance to dictionary."""
-        return {
+        result = {
             'instance_id': self.instance_id,
             'problem_statement': self.problem_statement,
             'difficulty': self.difficulty.value,
@@ -80,6 +82,9 @@ class BenchmarkInstance:
                 'author': self.metadata.author
             }
         }
+        if self.setup_script is not None:
+            result['setup_script'] = self.setup_script
+        return result
 
 
 def validate_instance(instance: Dict[str, Any]) -> List[str]:

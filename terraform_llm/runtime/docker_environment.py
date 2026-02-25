@@ -85,9 +85,12 @@ class LocalstackDockerEnvironment:
             "docker", "run", "-d",
             "--name", container_name,
             "--network", self.network_name,
+            "-v", "/var/run/docker.sock:/var/run/docker.sock",  # Mount Docker socket for Lambda execution
             "-e", "SERVICES=s3,ec2,lambda,iam,dynamodb,rds,ecs,cloudfront,route53",
             "-e", "DEBUG=1",
             "-e", "LS_LOG=trace",
+            "-e", "LAMBDA_EXECUTOR=docker",  # Use docker executor for Lambda
+            "-e", "DOCKER_HOST=unix:///var/run/docker.sock",
             "-p", "4566:4566",
             self.localstack_image,
         ]

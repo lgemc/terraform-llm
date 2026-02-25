@@ -268,6 +268,7 @@ def run_command(
                 expected_resources=instance.expected_resources,
                 problem_statement=instance.problem_statement,
                 cleanup=cleanup,
+                setup_script=instance.setup_script,
             )
 
             # Print result
