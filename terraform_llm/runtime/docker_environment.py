@@ -62,7 +62,22 @@ class LocalstackDockerEnvironment:
         self.logger.info(f"Created network: {self.network_name}")
 
     def _start_localstack(self) -> None:
-        """Start localstack container."""
+        """Start or reuse localstack container."""
+        # Check if there's already a running localstack container
+        existing = self._find_running_localstack()
+
+        if existing:
+            self.localstack_container_id = existing
+            self.logger.info(f"Reusing existing localstack container: {self.localstack_container_id}")
+
+            # Connect it to our network if not already connected
+            self._connect_to_network(self.localstack_container_id, self.network_name)
+
+            # Verify it's healthy
+            self._wait_for_localstack()
+            return
+
+        # Start new container
         container_name = f"localstack-{uuid.uuid4().hex[:8]}"
 
         cmd = [
@@ -92,10 +107,56 @@ class LocalstackDockerEnvironment:
         # Wait for localstack to be ready
         self._wait_for_localstack()
 
+    def _find_running_localstack(self) -> Optional[str]:
+        """Find a running localstack container."""
+        result = subprocess.run(
+            ["docker", "ps", "--filter", f"ancestor={self.localstack_image}",
+             "--filter", "status=running", "--format", "{{.ID}}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip().split('\n')[0]  # Return first running container
+        return None
+
+    def _connect_to_network(self, container_id: str, network: str) -> None:
+        """Connect container to network if not already connected."""
+        # Check if already connected
+        result = subprocess.run(
+            ["docker", "inspect", container_id,
+             "--format", "{{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        if network in result.stdout:
+            self.logger.debug(f"Container already connected to {network}")
+            return
+
+        # Connect to network
+        result = subprocess.run(
+            ["docker", "network", "connect", network, container_id],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+
+        if result.returncode == 0:
+            self.logger.debug(f"Connected container to {network}")
+        else:
+            # Ignore error if already connected (race condition)
+            if "already exists" not in result.stderr:
+                self.logger.warning(f"Failed to connect to network: {result.stderr}")
+
     def _wait_for_localstack(self) -> None:
         """Wait for localstack to be ready."""
         import time
-        max_retries = 30
+        max_retries = 60
+
+        self.logger.info("Waiting for Localstack to be ready...")
 
         for i in range(max_retries):
             try:
@@ -110,14 +171,19 @@ class LocalstackDockerEnvironment:
                     timeout=5,
                 )
 
-                if result.returncode == 0 and "running" in result.stdout:
-                    self.logger.info("Localstack is ready")
-                    return
+                if result.returncode == 0:
+                    # Check for "running" or "available" in response
+                    if "running" in result.stdout or "available" in result.stdout:
+                        self.logger.info("Localstack is ready")
+                        return
+                    else:
+                        self.logger.debug(f"Health check response: {result.stdout[:200]}")
 
             except subprocess.TimeoutExpired:
-                pass
+                self.logger.debug(f"Health check timed out")
 
-            self.logger.debug(f"Waiting for localstack... ({i+1}/{max_retries})")
+            if i % 5 == 0:  # Log every 10 seconds
+                self.logger.info(f"Waiting for localstack... ({i+1}/{max_retries})")
             time.sleep(2)
 
         raise RuntimeError("Localstack failed to start within timeout")
@@ -162,9 +228,11 @@ class LocalstackDockerEnvironment:
         for key, value in default_env.items():
             cmd.extend(["-e", f"{key}={value}"])
 
+        # Override entrypoint to use sh for executing commands
         cmd.extend([
+            "--entrypoint", "sh",
             self.image,
-            "sh", "-c",
+            "-c",
             command,
         ])
 
