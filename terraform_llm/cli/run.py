@@ -1,12 +1,12 @@
 """CLI command for running benchmarks with tracing."""
 
 from typing import Optional, List
+from pathlib import Path
 import typer
 
-from ..agent.runner import BenchmarkRunner
-from ..agent.terraform_agent import TerraformAgent
-from ..model.client import create_client
-from ..logging import ConsoleLogger, LogLevel
+from ..agent import ModelConfig, generate_hcl
+from ..datasets import load_dataset, DatasetLoader
+from ..runtime import DockerBenchmarkExecutor, BenchmarkExecutor
 
 
 def run_command(
@@ -142,83 +142,142 @@ def run_command(
     """
     cleanup = not no_cleanup
 
-    # Initialize logger
-    log_level = LogLevel.DEBUG if verbose else LogLevel.INFO
-    logger = ConsoleLogger(
-        min_level=log_level,
-        colored=True,
-        show_timestamp=verbose,  # Only show timestamps in verbose mode
-        show_data=True,
-        compact=False
-    )
-
-    # Handle skip_generation flag
-    if skip_generation:
-        logger.info("config.skip_generation", "Skipping code generation - will reuse existing files", {
-            "output_dir": output_dir
-        })
-        if model_provider:
-            logger.warning("config.model_ignored", "Model provider will be ignored with --skip-generation", {
-                "provider": model_provider
-            })
-
-    # Initialize agent if model provider specified
-    agent = None
-    if model_provider and not skip_generation:
-        try:
-            model_client = create_client(
-                provider=model_provider,
-                api_key=api_key,
-                model=model_name
-            )
-            agent = TerraformAgent(
-                model_client=model_client,
-                max_iterations=max_iterations,
-                verbose=verbose
-            )
-            logger.info("agent.initialized", f"Initialized {model_provider} agent", {
-                "provider": model_provider,
-                "model": model_name or "default"
-            })
-        except Exception as e:
-            logger.error("agent.init_failed", f"Error initializing agent: {e}", {
-                "provider": model_provider,
-                "error": str(e)
-            })
-            raise typer.Exit(code=1)
-
-    # Initialize runner
-    runner = BenchmarkRunner(
-        dataset_path=dataset,
-        output_dir=output_dir,
-        traces_dir=traces_dir,
-        agent=agent,
-        logger=logger,
-        use_docker=use_docker,
-        terraform_image=terraform_image,
-        localstack_image=localstack_image,
-        skip_generation=skip_generation
-    )
-
+    # Load dataset
     try:
         if instance_id:
-            # Run single instance
-            result = runner.run_instance(
-                instance_id=instance_id,
-                cleanup=cleanup,
-                run_name=run_name
-            )
+            # Load single instance
+            loader = DatasetLoader(dataset)
+            instance = loader.get_by_id(instance_id)
+            if not instance:
+                typer.echo(f"Error: Instance {instance_id} not found in dataset", err=True)
+                raise typer.Exit(code=1)
+            instances = [instance]
         else:
-            # Run all instances with filters
-            summary = runner.run_all(
-                cleanup=cleanup,
-                run_name=run_name,
-                limit=limit,
+            # Load with filters
+            dataset_obj = load_dataset(
+                dataset,
                 difficulty=difficulty,
                 provider=provider,
-                tags=tags
+                tags=tags,
+                limit=limit,
+            )
+            instances = list(dataset_obj)
+
+        if not instances:
+            typer.echo("No instances found matching the filters", err=True)
+            raise typer.Exit(code=1)
+
+    except FileNotFoundError as e:
+        typer.echo(f"Error: Dataset not found: {dataset}", err=True)
+        raise typer.Exit(code=1)
+    except Exception as e:
+        typer.echo(f"Error loading dataset: {e}", err=True)
+        raise typer.Exit(code=1)
+
+    # Initialize model configuration if needed
+    model_config = None
+    if model_provider and not skip_generation:
+        try:
+            # Map provider shorthand to full model name if needed
+            if model_name:
+                full_model = model_name
+            elif model_provider == "anthropic":
+                full_model = "anthropic/claude-3-5-sonnet-20241022"
+            elif model_provider == "openai":
+                full_model = "openai/gpt-4o"
+            else:
+                full_model = f"{model_provider}/default"
+
+            model_config = ModelConfig(
+                model=full_model,
+                temperature=0.0,
+            )
+            if verbose:
+                typer.echo(f"Initialized model: {model_config.model}")
+        except Exception as e:
+            typer.echo(f"Error initializing model: {e}", err=True)
+            raise typer.Exit(code=1)
+    elif not skip_generation:
+        typer.echo("Error: --model is required (or use --skip-generation)", err=True)
+        raise typer.Exit(code=1)
+
+    # Initialize executor
+    if use_docker:
+        executor = DockerBenchmarkExecutor(
+            output_dir=output_dir,
+            terraform_image=terraform_image,
+            localstack_image=localstack_image,
+        )
+        typer.echo("Using Docker + Localstack for execution")
+    else:
+        executor = BenchmarkExecutor(output_dir=output_dir)
+        typer.echo("Using local Terraform execution (no Docker)")
+
+    # Process instances
+    results = []
+    for idx, instance in enumerate(instances, 1):
+        typer.echo(f"\n[{idx}/{len(instances)}] Processing: {instance.instance_id}")
+
+        try:
+            # Generate code if needed
+            if skip_generation:
+                # Load existing code from output directory
+                instance_dir = Path(output_dir) / instance.instance_id
+                if not instance_dir.exists():
+                    typer.echo(f"  Error: No existing code found in {instance_dir}", err=True)
+                    continue
+
+                terraform_code = {}
+                for tf_file in instance_dir.glob("*.tf"):
+                    terraform_code[tf_file.name] = tf_file.read_text()
+
+                if not terraform_code:
+                    typer.echo(f"  Error: No .tf files found in {instance_dir}", err=True)
+                    continue
+
+                typer.echo(f"  Loaded {len(terraform_code)} file(s) from {instance_dir}")
+            else:
+                # Generate code
+                typer.echo("  Generating Terraform code...")
+                terraform_code = generate_hcl(
+                    config=model_config,
+                    problem_statement=instance.problem_statement,
+                    provider=instance.provider,
+                    region=instance.region,
+                    hints=instance.hints,
+                )
+                typer.echo(f"  Generated {len(terraform_code)} file(s)")
+
+            # Execute
+            typer.echo("  Executing...")
+            result = executor.execute_instance(
+                instance_id=instance.instance_id,
+                terraform_code=terraform_code,
+                validation_script=instance.validation_script or "",
+                region=instance.region,
+                expected_resources=instance.expected_resources,
+                problem_statement=instance.problem_statement,
+                cleanup=cleanup,
             )
 
-    except Exception as e:
-        typer.echo(f"Error: {e}", err=True)
-        raise typer.Exit(code=1)
+            # Print result
+            status = "✓ PASSED" if result.get('passed') else "✗ FAILED"
+            typer.echo(f"  {status}")
+
+            if 'trace_path' in result and verbose:
+                typer.echo(f"  Trace: {result['trace_path']}")
+
+            results.append(result)
+
+        except Exception as e:
+            typer.echo(f"  Error: {e}", err=True)
+            if verbose:
+                import traceback
+                traceback.print_exc()
+
+    # Print summary
+    if results:
+        passed = sum(1 for r in results if r.get('passed'))
+        typer.echo(f"\n{'='*60}")
+        typer.echo(f"Summary: {passed}/{len(results)} passed ({passed/len(results)*100:.1f}%)")
+        typer.echo(f"{'='*60}")

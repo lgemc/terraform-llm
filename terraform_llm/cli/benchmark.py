@@ -5,8 +5,8 @@ import typer
 from rich import print as rprint
 from rich.console import Console
 
-from ..agent import TerraformAgent, BenchmarkRunner
-from ..model import create_client
+from ..agent import ModelConfig, EvalConfig, run_benchmark
+from ..datasets import load_dataset
 
 console = Console()
 
@@ -14,55 +14,62 @@ console = Console()
 def benchmark_command(
     dataset: str = typer.Argument(..., help="Path to JSONL dataset file"),
     output_dir: str = typer.Option(..., "-o", "--output-dir", help="Output directory"),
-    provider: str = typer.Option("anthropic", help="Model provider (anthropic/openai)"),
-    model: Optional[str] = typer.Option(None, help="Model identifier"),
-    max_iterations: int = typer.Option(3, help="Max fix iterations"),
+    model: str = typer.Option("anthropic/claude-3-5-sonnet-20241022", help="Model identifier (e.g., anthropic/claude-sonnet-4-5-20250929, openai/gpt-4o)"),
+    temperature: float = typer.Option(0.0, help="Model temperature"),
     difficulty: Optional[str] = typer.Option(None, help="Filter by difficulty"),
     filter_provider: Optional[str] = typer.Option(None, help="Filter by cloud provider"),
     limit: Optional[int] = typer.Option(None, help="Limit number of instances"),
-    cleanup: bool = typer.Option(True, help="Destroy infrastructure after test"),
+    run_apply: bool = typer.Option(False, help="Run terraform apply (creates real infrastructure)"),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose output")
 ):
     """Run benchmark evaluation."""
     rprint(f"[bold]Running benchmark on dataset:[/bold] {dataset}")
 
-    # Create model client
-    model_client = create_client(
-        provider=provider,
-        model=model
+    # Load dataset with filters
+    dataset_obj = load_dataset(
+        dataset,
+        difficulty=difficulty,
+        provider=filter_provider,
+        limit=limit,
     )
 
-    # Create agent
-    agent = TerraformAgent(
-        model_client=model_client,
-        max_iterations=max_iterations,
-        verbose=verbose
+    # Create model configuration
+    model_config = ModelConfig(
+        model=model,
+        temperature=temperature,
+    )
+
+    # Create evaluation configuration
+    eval_config = EvalConfig(
+        run_apply=run_apply,
+        run_destroy=True,
+        run_validation=run_apply,  # Only run validation if we're applying
     )
 
     # Run benchmark
-    runner = BenchmarkRunner(
-        agent=agent,
-        dataset_path=dataset,
-        output_dir=output_dir,
-        cleanup=cleanup
-    )
-
-    results = runner.run_benchmark(
-        difficulty=difficulty,
-        provider=filter_provider,
-        limit=limit
+    report = run_benchmark(
+        dataset=dataset_obj,
+        model_config=model_config,
+        eval_config=eval_config,
     )
 
     # Print summary
     console.print("\n" + "=" * 60)
     console.print("[bold]BENCHMARK RESULTS[/bold]", justify="center")
     console.print("=" * 60)
-    console.print(f"Total instances: {results['total_instances']}")
-    console.print(f"[green]Passed:[/green] {results['passed']}")
-    console.print(f"[red]Failed:[/red] {results['failed']}")
-    console.print(f"Pass rate: {results['pass_rate']:.2%}")
-    console.print("\n[bold]Failure breakdown:[/bold]")
-    console.print(f"  Generation: {results['failure_breakdown']['generation']}")
-    console.print(f"  Terraform: {results['failure_breakdown']['terraform']}")
-    console.print(f"  Validation: {results['failure_breakdown']['validation']}")
-    console.print(f"\n[green]Results saved to:[/green] {output_dir}/benchmark_results.json")
+    console.print(f"Model: {model_config.model}")
+    console.print(f"Total instances: {len(report.results)}")
+    console.print(f"Mean score: {report.mean_score:.2f}")
+
+    # Calculate pass rate (score >= 0.8)
+    passed = sum(1 for r in report.results if r.total_score >= 0.8)
+    pass_rate = passed / len(report.results) if report.results else 0.0
+    console.print(f"[green]Passed (score >= 0.8):[/green] {passed}/{len(report.results)} ({pass_rate:.1%})")
+
+    # Stage pass rates
+    console.print("\n[bold]Stage pass rates:[/bold]")
+    stage_rates = report.stage_pass_rates()
+    for stage, rate in stage_rates.items():
+        console.print(f"  {stage}: {rate:.1%}")
+
+    console.print(f"\n[green]Results can be exported to:[/green] {output_dir}/benchmark_results.json")

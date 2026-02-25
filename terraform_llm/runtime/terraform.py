@@ -233,33 +233,18 @@ class TerraformRuntime:
 
 def create_terraform_files(
     working_dir: str,
-    main_tf: str,
-    variables_tf: Optional[str] = None,
-    outputs_tf: Optional[str] = None,
-    terraform_tfvars: Optional[str] = None
+    terraform_code: Dict[str, str]
 ) -> None:
     """
     Create Terraform configuration files.
 
     Args:
         working_dir: Directory to create files in
-        main_tf: Content of main.tf
-        variables_tf: Optional content of variables.tf
-        outputs_tf: Optional content of outputs.tf
-        terraform_tfvars: Optional content of terraform.tfvars
+        terraform_code: Dictionary mapping filenames to content
     """
     work_dir = Path(working_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
 
-    # Write main.tf
-    (work_dir / 'main.tf').write_text(main_tf)
-
-    # Write optional files
-    if variables_tf:
-        (work_dir / 'variables.tf').write_text(variables_tf)
-
-    if outputs_tf:
-        (work_dir / 'outputs.tf').write_text(outputs_tf)
-
-    if terraform_tfvars:
-        (work_dir / 'terraform.tfvars').write_text(terraform_tfvars)
+    for filename, content in terraform_code.items():
+        if content:
+            (work_dir / filename).write_text(content)

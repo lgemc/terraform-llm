@@ -221,10 +221,7 @@ class DockerBenchmarkExecutor:
         """Create Terraform files from code dictionary."""
         create_terraform_files(
             working_dir=str(work_dir),
-            main_tf=terraform_code.get("main.tf", ""),
-            variables_tf=terraform_code.get("variables.tf"),
-            outputs_tf=terraform_code.get("outputs.tf"),
-            terraform_tfvars=terraform_code.get("terraform.tfvars"),
+            terraform_code=terraform_code
         )
 
     def _run_terraform_workflow(
