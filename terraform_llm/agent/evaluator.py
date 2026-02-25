@@ -4,9 +4,9 @@ import logging
 from typing import Dict, Tuple
 from dataclasses import dataclass
 
-from ..datasets.schema import BenchmarkInstance
-from .results import StageResult, StageStatus, InstanceResult
-from .environment import TerraformEnvironment
+from terraform_llm.datasets.schema import BenchmarkInstance
+from terraform_llm.agent.results import StageResult, StageStatus, InstanceResult
+from terraform_llm.agent.environment import TerraformEnvironment
 
 logger = logging.getLogger(__name__)
 

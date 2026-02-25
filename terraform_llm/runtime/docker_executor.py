@@ -6,8 +6,8 @@ import traceback
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from .docker_environment import LocalstackDockerEnvironment
-from .terraform import create_terraform_files
+from terraform_llm.runtime.docker_environment import LocalstackDockerEnvironment
+from terraform_llm.runtime.terraform import create_terraform_files
 
 
 class DockerBenchmarkExecutor:

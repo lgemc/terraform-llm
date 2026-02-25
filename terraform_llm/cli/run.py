@@ -4,9 +4,9 @@ from typing import Optional, List
 from pathlib import Path
 import typer
 
-from ..agent import ModelConfig, generate_hcl
-from ..datasets import load_dataset, DatasetLoader
-from ..runtime import DockerBenchmarkExecutor, BenchmarkExecutor
+from terraform_llm.agent import ModelConfig, generate_hcl
+from terraform_llm.datasets import load_dataset, DatasetLoader
+from terraform_llm.runtime import DockerBenchmarkExecutor, BenchmarkExecutor
 
 
 def run_command(

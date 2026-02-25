@@ -3,11 +3,11 @@
 import logging
 from typing import Optional
 
-from ..datasets.schema import BenchmarkInstance
-from ..datasets.dataset import Dataset
-from .models import ModelConfig, generate_hcl
-from .evaluator import EvalConfig, evaluate_instance
-from .results import InstanceResult, BenchmarkReport
+from terraform_llm.datasets.schema import BenchmarkInstance
+from terraform_llm.datasets.dataset import Dataset
+from terraform_llm.agent.models import ModelConfig, generate_hcl
+from terraform_llm.agent.evaluator import EvalConfig, evaluate_instance
+from terraform_llm.agent.results import InstanceResult, BenchmarkReport
 
 logger = logging.getLogger(__name__)
 

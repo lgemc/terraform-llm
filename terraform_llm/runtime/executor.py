@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 import importlib.util
 
-from .terraform import TerraformRuntime, create_terraform_files
+from terraform_llm.runtime.terraform import TerraformRuntime, create_terraform_files
 
 
 class BenchmarkExecutor:

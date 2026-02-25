@@ -1,8 +1,8 @@
 """Dataset management subcommands."""
 
 import typer
-from .summary import summary_command
-from .visualize import visualize_command, stats_command
+from terraform_llm.cli.datasets.summary import summary_command
+from terraform_llm.cli.datasets.visualize import visualize_command, stats_command
 
 datasets_app = typer.Typer(help="Dataset management commands")
 

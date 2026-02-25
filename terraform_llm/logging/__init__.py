@@ -1,6 +1,6 @@
 """Logging module for terraform-agent."""
 
-from .logger import (
+from terraform_llm.logging.logger import (
     Logger,
     LogLevel,
     ConsoleLogger,

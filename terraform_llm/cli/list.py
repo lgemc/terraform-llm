@@ -4,7 +4,7 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-from ..datasets import DatasetLoader
+from terraform_llm.datasets import DatasetLoader
 
 console = Console()
 

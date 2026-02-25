@@ -1,8 +1,8 @@
 """AI model client for generating Terraform code."""
 
-from typing import Dict, Any, Optional, List
-from abc import ABC, abstractmethod
 import os
+from abc import ABC, abstractmethod
+from typing import Dict, List, Optional
 
 
 class ModelClient(ABC):
@@ -40,7 +40,9 @@ class ModelClient(ABC):
 class AnthropicClient(ModelClient):
     """Client for Anthropic Claude models."""
 
-    def __init__(self, api_key: Optional[str] = None, model: str = "claude-3-5-sonnet-20241022"):
+    def __init__(
+        self, api_key: Optional[str] = None, model: str = "claude-haiku-4-5-20251001"
+    ):
         """
         Initialize Anthropic client.
 
@@ -56,7 +58,7 @@ class AnthropicClient(ModelClient):
                 "Install it with: pip install anthropic"
             )
 
-        self.api_key = api_key or os.getenv('ANTHROPIC_API_KEY')
+        self.api_key = api_key or os.getenv("ANTHROPIC_API_KEY")
         if not self.api_key:
             raise ValueError("API key required (set ANTHROPIC_API_KEY or pass api_key)")
 
@@ -70,15 +72,15 @@ class AnthropicClient(ModelClient):
 
     def chat(self, messages: List[Dict[str, str]], **kwargs) -> str:
         """Generate response from chat messages."""
-        max_tokens = kwargs.pop('max_tokens', 4096)
-        temperature = kwargs.pop('temperature', 1.0)
+        max_tokens = kwargs.pop("max_tokens", 4096)
+        temperature = kwargs.pop("temperature", 1.0)
 
         response = self.client.messages.create(
             model=self.model,
             max_tokens=max_tokens,
             temperature=temperature,
             messages=messages,
-            **kwargs
+            **kwargs,
         )
 
         return response.content[0].text
@@ -99,11 +101,10 @@ class OpenAIClient(ModelClient):
             import openai
         except ImportError:
             raise ImportError(
-                "openai package not installed. "
-                "Install it with: pip install openai"
+                "openai package not installed. Install it with: pip install openai"
             )
 
-        self.api_key = api_key or os.getenv('OPENAI_API_KEY')
+        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
         if not self.api_key:
             raise ValueError("API key required (set OPENAI_API_KEY or pass api_key)")
 
@@ -117,18 +118,18 @@ class OpenAIClient(ModelClient):
 
     def chat(self, messages: List[Dict[str, str]], **kwargs) -> str:
         """Generate response from chat messages."""
-        temperature = kwargs.pop('temperature', 1.0)
-        max_tokens = kwargs.pop('max_tokens', None)
+        temperature = kwargs.pop("temperature", 1.0)
+        max_tokens = kwargs.pop("max_tokens", None)
 
         completion_kwargs = {
-            'model': self.model,
-            'messages': messages,
-            'temperature': temperature,
-            **kwargs
+            "model": self.model,
+            "messages": messages,
+            "temperature": temperature,
+            **kwargs,
         }
 
         if max_tokens:
-            completion_kwargs['max_tokens'] = max_tokens
+            completion_kwargs["max_tokens"] = max_tokens
 
         response = self.client.chat.completions.create(**completion_kwargs)
 
@@ -138,7 +139,7 @@ class OpenAIClient(ModelClient):
 def create_client(
     provider: str = "anthropic",
     api_key: Optional[str] = None,
-    model: Optional[str] = None
+    model: Optional[str] = None,
 ) -> ModelClient:
     """
     Factory function to create a model client.
@@ -152,15 +153,15 @@ def create_client(
         ModelClient instance
     """
     if provider.lower() == "anthropic":
-        kwargs = {'api_key': api_key} if api_key else {}
+        kwargs = {"api_key": api_key} if api_key else {}
         if model:
-            kwargs['model'] = model
+            kwargs["model"] = model
         return AnthropicClient(**kwargs)
 
     elif provider.lower() == "openai":
-        kwargs = {'api_key': api_key} if api_key else {}
+        kwargs = {"api_key": api_key} if api_key else {}
         if model:
-            kwargs['model'] = model
+            kwargs["model"] = model
         return OpenAIClient(**kwargs)
 
     else:

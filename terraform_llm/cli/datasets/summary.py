@@ -5,7 +5,7 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from ...datasets import load_dataset
+from terraform_llm.datasets import load_dataset
 
 console = Console()
 

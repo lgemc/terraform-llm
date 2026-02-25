@@ -5,8 +5,8 @@ import typer
 from rich import print as rprint
 from rich.console import Console
 
-from ..agent import ModelConfig, EvalConfig, run_benchmark
-from ..datasets import load_dataset
+from terraform_llm.agent import ModelConfig, EvalConfig, run_benchmark
+from terraform_llm.datasets import load_dataset
 
 console = Console()
 

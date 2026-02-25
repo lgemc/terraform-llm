@@ -1,7 +1,7 @@
 """Validation tests for S3 + CloudFront infrastructure."""
 
 from typing import Dict, Any, Optional
-from .base_test import BaseTerraformTest
+from terraform_llm.validation_tests.base_test import BaseTerraformTest
 
 
 class TestS3CloudFrontInfrastructure(BaseTerraformTest):

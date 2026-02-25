@@ -2,12 +2,12 @@
 
 import typer
 
-from .benchmark import benchmark_command
-from .generate import generate_command
-from .list import list_command
-from .run import run_command
-from .traces import traces_command
-from .datasets import datasets_app
+from terraform_llm.cli.benchmark import benchmark_command
+from terraform_llm.cli.generate import generate_command
+from terraform_llm.cli.list import list_command
+from terraform_llm.cli.run import run_command
+from terraform_llm.cli.traces import traces_command
+from terraform_llm.cli.datasets import datasets_app
 
 app = typer.Typer(help="Terraform Agent Benchmark - AI agent evaluation framework")
 

@@ -1,12 +1,12 @@
 """Model client module for AI-powered Terraform generation."""
 
-from .client import (
+from terraform_llm.model.client import (
     ModelClient,
     AnthropicClient,
     OpenAIClient,
     create_client
 )
-from .prompts import (
+from terraform_llm.model.prompts import (
     SYSTEM_PROMPT,
     create_generation_prompt,
     create_fix_prompt,

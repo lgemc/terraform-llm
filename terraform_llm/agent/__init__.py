@@ -1,26 +1,26 @@
 """Benchmark runner module for Terraform LLM evaluation."""
 
-from .results import (
+from terraform_llm.agent.results import (
     StageStatus,
     StageResult,
     InstanceResult,
     BenchmarkReport,
 )
-from .models import (
+from terraform_llm.agent.models import (
     ModelConfig,
     generate_hcl,
     parse_hcl_response,
 )
-from .environment import (
+from terraform_llm.agent.environment import (
     TerraformEnvironment,
     CommandResult,
 )
-from .evaluator import (
+from terraform_llm.agent.evaluator import (
     EvalConfig,
     evaluate_instance,
     score_plan,
 )
-from .agent import (
+from terraform_llm.agent.agent import (
     run_instance,
     run_benchmark,
 )
