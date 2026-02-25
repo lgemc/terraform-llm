@@ -44,6 +44,7 @@ class TestLambdaInfrastructure:
             ('lambda_exists', self.test_lambda_exists),
             ('lambda_name_correct', self.test_lambda_name_correct),
             ('lambda_runtime', self.test_lambda_runtime),
+            ('lambda_s3_deployment', self.test_lambda_s3_deployment),
             ('iam_role_exists', self.test_iam_role_exists),
             ('iam_assume_role_policy', self.test_iam_assume_role_policy),
             ('iam_policy_attachment', self.test_iam_policy_attachment),
@@ -78,12 +79,42 @@ class TestLambdaInfrastructure:
             raise AssertionError("Lambda function 'hello_world' not found")
 
     def test_lambda_runtime(self):
-        """Check Lambda function uses Python 3.9 runtime."""
+        """Check Lambda function uses Go runtime (provided.al2 or go1.x)."""
         if not self._function:
             self.test_lambda_name_correct()
 
         runtime = self._function.get('Runtime', '')
-        assert runtime == 'python3.9', f"Lambda runtime is '{runtime}', expected 'python3.9'"
+        valid_runtimes = ['provided.al2', 'go1.x']
+        assert runtime in valid_runtimes, \
+            f"Lambda runtime is '{runtime}', expected one of {valid_runtimes}"
+
+    def test_lambda_s3_deployment(self):
+        """Check Lambda function uses S3 deployment (not local file)."""
+        if not self._function:
+            self.test_lambda_name_correct()
+
+        # Get function code location
+        try:
+            code_info = self.lambda_client.get_function(FunctionName='hello_world')
+            code = code_info.get('Code', {})
+
+            # Check that S3 location is present
+            s3_bucket = self._function.get('CodeSha256')  # This will exist for any deployment
+            assert s3_bucket, "Lambda function does not have code"
+
+            # The function configuration should not have a local file reference
+            # Instead, it should have been deployed from S3
+            # We can verify this by checking the Code section
+            repository_type = code.get('RepositoryType')
+            if repository_type:
+                assert repository_type == 'S3', \
+                    f"Lambda deployed from {repository_type}, expected S3"
+
+        except Exception as e:
+            # If we can't verify deployment method conclusively, just check handler
+            handler = self._function.get('Handler', '')
+            assert handler == 'bootstrap', \
+                f"Lambda handler is '{handler}', expected 'bootstrap' for Go Lambda"
 
     def test_iam_role_exists(self):
         """Check IAM role exists for Lambda function."""

@@ -229,7 +229,8 @@ def create_instance(
         metadata=metadata,
         required_outputs=kwargs.get('required_outputs', []),
         gold_solution=kwargs.get('gold_solution', {}),
-        hints=kwargs.get('hints', [])
+        hints=kwargs.get('hints', []),
+        setup_script=kwargs.get('setup_script')
     )
 
 

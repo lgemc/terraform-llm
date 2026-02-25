@@ -1,6 +1,8 @@
 """High-level execution orchestration for benchmark instances."""
 
+import os
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Dict, Any, Optional
 import importlib.util
@@ -28,7 +30,8 @@ class BenchmarkExecutor:
         validation_script: str,
         region: str,
         expected_resources: Dict[str, int],
-        cleanup: bool = True
+        cleanup: bool = True,
+        setup_script: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Execute a complete benchmark instance.
@@ -40,6 +43,7 @@ class BenchmarkExecutor:
             region: AWS region for validation
             expected_resources: Expected resource counts
             cleanup: Whether to destroy infrastructure after validation
+            setup_script: Optional path to setup script for pre-existing infrastructure
 
         Returns:
             Dictionary with execution results
@@ -55,6 +59,15 @@ class BenchmarkExecutor:
         }
 
         try:
+            # Run setup script if provided
+            if setup_script:
+                setup_results = self._run_setup_script(setup_script, instance_dir, region)
+                results['setup'] = setup_results
+
+                if not setup_results.get('success', False):
+                    results['error'] = 'Setup script failed'
+                    return results
+
             # Create Terraform files
             self._create_terraform_files(instance_dir, terraform_code)
 
@@ -78,10 +91,68 @@ class BenchmarkExecutor:
         finally:
             # Cleanup if requested
             if cleanup:
-                cleanup_results = self._cleanup(instance_dir)
+                cleanup_results = self._cleanup(instance_dir, setup_script)
                 results['cleanup'] = cleanup_results
 
         return results
+
+    def _run_setup_script(
+        self,
+        setup_script: str,
+        work_dir: Path,
+        region: str
+    ) -> Dict[str, Any]:
+        """
+        Execute setup script for pre-existing infrastructure.
+
+        Args:
+            setup_script: Path to setup script
+            work_dir: Working directory for execution
+            region: AWS region
+
+        Returns:
+            Dictionary with setup results
+        """
+        try:
+            # Prepare environment variables
+            env = os.environ.copy()
+            env['AWS_DEFAULT_REGION'] = region
+            env['AWS_REGION'] = region
+
+            # Add LocalStack endpoint if configured
+            if 'AWS_ENDPOINT_URL' in os.environ:
+                env['AWS_ENDPOINT_URL'] = os.environ['AWS_ENDPOINT_URL']
+
+            # Make script executable
+            os.chmod(setup_script, 0o755)
+
+            # Execute script in working directory
+            result = subprocess.run(
+                ['/bin/bash', setup_script],
+                cwd=str(work_dir),
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=300  # 5 minute timeout
+            )
+
+            return {
+                'success': result.returncode == 0,
+                'returncode': result.returncode,
+                'stdout': result.stdout,
+                'stderr': result.stderr
+            }
+
+        except subprocess.TimeoutExpired:
+            return {
+                'success': False,
+                'error': 'Setup script timed out after 5 minutes'
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }
 
     def _create_terraform_files(
         self,
@@ -241,17 +312,80 @@ class BenchmarkExecutor:
                 'error': str(e)
             }
 
-    def _cleanup(self, work_dir: Path) -> Dict[str, Any]:
+    def _cleanup(self, work_dir: Path, setup_script: Optional[str] = None) -> Dict[str, Any]:
         """Destroy Terraform infrastructure and optionally remove directory."""
         runtime = TerraformRuntime(str(work_dir))
 
         # Try to destroy infrastructure
         destroy_result = runtime.destroy()
 
-        return {
+        cleanup_results = {
             'destroyed': destroy_result['success'],
             'destroy_output': destroy_result
         }
+
+        # Run cleanup script if setup script exists
+        if setup_script:
+            cleanup_script = Path(setup_script).parent / 'cleanup.sh'
+            if cleanup_script.exists():
+                cleanup_script_result = self._run_cleanup_script(str(cleanup_script), work_dir)
+                cleanup_results['cleanup_script'] = cleanup_script_result
+
+        return cleanup_results
+
+    def _run_cleanup_script(
+        self,
+        cleanup_script: str,
+        work_dir: Path
+    ) -> Dict[str, Any]:
+        """
+        Execute cleanup script for pre-existing infrastructure.
+
+        Args:
+            cleanup_script: Path to cleanup script
+            work_dir: Working directory for execution
+
+        Returns:
+            Dictionary with cleanup results
+        """
+        try:
+            # Prepare environment variables
+            env = os.environ.copy()
+
+            # Add LocalStack endpoint if configured
+            if 'AWS_ENDPOINT_URL' in os.environ:
+                env['AWS_ENDPOINT_URL'] = os.environ['AWS_ENDPOINT_URL']
+
+            # Make script executable
+            os.chmod(cleanup_script, 0o755)
+
+            # Execute script
+            result = subprocess.run(
+                ['/bin/bash', cleanup_script],
+                cwd=str(work_dir),
+                capture_output=True,
+                text=True,
+                env=env,
+                timeout=300  # 5 minute timeout
+            )
+
+            return {
+                'success': result.returncode == 0,
+                'returncode': result.returncode,
+                'stdout': result.stdout,
+                'stderr': result.stderr
+            }
+
+        except subprocess.TimeoutExpired:
+            return {
+                'success': False,
+                'error': 'Cleanup script timed out after 5 minutes'
+            }
+        except Exception as e:
+            return {
+                'success': False,
+                'error': str(e)
+            }
 
     def cleanup_directory(self, instance_id: str) -> None:
         """Remove instance directory completely."""
