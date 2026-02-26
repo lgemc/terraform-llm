@@ -1,9 +1,10 @@
 """Docker environment for isolated Terraform execution with Localstack."""
 
 import logging
-import os
 import shlex
+import shutil
 import subprocess
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -21,16 +22,6 @@ class LocalstackDockerEnvironment:
         timeout: int = 300,
         logger: Optional[logging.Logger] = None,
     ):
-        """
-        Initialize docker environment with localstack.
-
-        Args:
-            work_dir: Host directory to mount as working directory
-            image: Terraform docker image
-            localstack_image: Localstack docker image
-            timeout: Command execution timeout in seconds
-            logger: Optional logger instance
-        """
         self.work_dir = Path(work_dir)
         self.image = image
         self.localstack_image = localstack_image
@@ -64,32 +55,26 @@ class LocalstackDockerEnvironment:
 
     def _start_localstack(self) -> None:
         """Start or reuse localstack container."""
-        # Check if there's already a running localstack container
         existing = self._find_running_localstack()
 
         if existing:
             self.localstack_container_id, self.localstack_container_name = existing
             self.logger.info(f"Reusing existing localstack container: {self.localstack_container_id} ({self.localstack_container_name})")
-
-            # Connect it to our network if not already connected
             self._connect_to_network(self.localstack_container_id, self.network_name)
-
-            # Verify it's healthy
             self._wait_for_localstack()
             return
 
-        # Start new container
         container_name = f"localstack-{uuid.uuid4().hex[:8]}"
 
         cmd = [
             "docker", "run", "-d",
             "--name", container_name,
             "--network", self.network_name,
-            "-v", "/var/run/docker.sock:/var/run/docker.sock",  # Mount Docker socket for Lambda execution
+            "-v", "/var/run/docker.sock:/var/run/docker.sock",
             "-e", "SERVICES=s3,ec2,lambda,iam,dynamodb,rds,ecs,cloudfront,route53",
             "-e", "DEBUG=1",
             "-e", "LS_LOG=trace",
-            "-e", "LAMBDA_EXECUTOR=docker",  # Use docker executor for Lambda
+            "-e", "LAMBDA_EXECUTOR=docker",
             "-e", "DOCKER_HOST=unix:///var/run/docker.sock",
             "-p", "4566:4566",
             self.localstack_image,
@@ -109,7 +94,6 @@ class LocalstackDockerEnvironment:
         self.localstack_container_name = container_name
         self.logger.info(f"Started localstack container: {self.localstack_container_id}")
 
-        # Wait for localstack to be ready
         self._wait_for_localstack()
 
     def _find_running_localstack(self) -> Optional[tuple[str, str]]:
@@ -123,7 +107,7 @@ class LocalstackDockerEnvironment:
         )
 
         if result.returncode == 0 and result.stdout.strip():
-            line = result.stdout.strip().split('\n')[0]  # Get first running container
+            line = result.stdout.strip().split('\n')[0]
             parts = line.split('\t')
             if len(parts) == 2:
                 return parts[0], parts[1]
@@ -131,7 +115,6 @@ class LocalstackDockerEnvironment:
 
     def _connect_to_network(self, container_id: str, network: str) -> None:
         """Connect container to network if not already connected."""
-        # Check if already connected
         result = subprocess.run(
             ["docker", "inspect", container_id,
              "--format", "{{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}"],
@@ -144,7 +127,6 @@ class LocalstackDockerEnvironment:
             self.logger.debug(f"Container already connected to {network}")
             return
 
-        # Connect to network
         result = subprocess.run(
             ["docker", "network", "connect", network, container_id],
             capture_output=True,
@@ -155,13 +137,11 @@ class LocalstackDockerEnvironment:
         if result.returncode == 0:
             self.logger.debug(f"Connected container to {network}")
         else:
-            # Ignore error if already connected (race condition)
             if "already exists" not in result.stderr:
                 self.logger.warning(f"Failed to connect to network: {result.stderr}")
 
     def _wait_for_localstack(self) -> None:
         """Wait for localstack to be ready."""
-        import time
         max_retries = 60
 
         self.logger.info("Waiting for Localstack to be ready...")
@@ -180,7 +160,6 @@ class LocalstackDockerEnvironment:
                 )
 
                 if result.returncode == 0:
-                    # Check for "running" or "available" in response
                     if "running" in result.stdout or "available" in result.stdout:
                         self.logger.info("Localstack is ready")
                         return
@@ -188,9 +167,9 @@ class LocalstackDockerEnvironment:
                         self.logger.debug(f"Health check response: {result.stdout[:200]}")
 
             except subprocess.TimeoutExpired:
-                self.logger.debug(f"Health check timed out")
+                self.logger.debug("Health check timed out")
 
-            if i % 5 == 0:  # Log every 10 seconds
+            if i % 5 == 0:
                 self.logger.info(f"Waiting for localstack... ({i+1}/{max_retries})")
             time.sleep(2)
 
@@ -201,30 +180,18 @@ class LocalstackDockerEnvironment:
         command: str,
         env_vars: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
-        """
-        Execute a terraform command in the docker container.
-
-        Args:
-            command: Terraform command to execute (e.g., "init", "plan", "apply")
-            env_vars: Additional environment variables
-
-        Returns:
-            Dictionary with output, returncode, and success status
-        """
-        # Configure AWS to use localstack
+        """Execute a terraform command in a Docker container."""
         default_env = {
             "AWS_ACCESS_KEY_ID": "test",
             "AWS_SECRET_ACCESS_KEY": "test",
             "AWS_DEFAULT_REGION": "us-east-1",
             "AWS_ENDPOINT_URL": f"http://{self.localstack_container_name}:4566",
-            # Terraform-specific localstack endpoints
             "TF_VAR_localstack": "true",
         }
 
         if env_vars:
             default_env.update(env_vars)
 
-        # Build docker exec command
         cmd = [
             "docker", "run", "--rm",
             "--network", self.network_name,
@@ -232,11 +199,9 @@ class LocalstackDockerEnvironment:
             "-w", "/workspace",
         ]
 
-        # Add environment variables
         for key, value in default_env.items():
             cmd.extend(["-e", f"{key}={value}"])
 
-        # Override entrypoint to use sh for executing commands
         cmd.extend([
             "--entrypoint", "sh",
             self.image,
@@ -264,7 +229,7 @@ class LocalstackDockerEnvironment:
                 "command": command,
             }
 
-        except subprocess.TimeoutExpired as e:
+        except subprocess.TimeoutExpired:
             return {
                 "output": "",
                 "stderr": f"Command timed out after {self.timeout}s",
@@ -288,16 +253,7 @@ class LocalstackDockerEnvironment:
         script_path: str,
         region: str = "us-east-1",
     ) -> Dict[str, Any]:
-        """
-        Execute a validation script in a Python container.
-
-        Args:
-            script_path: Path to validation script on host
-            region: AWS region
-
-        Returns:
-            Dictionary with validation results
-        """
+        """Execute a validation script in a Python container."""
         script_path = Path(script_path)
 
         if not script_path.exists():
@@ -306,7 +262,6 @@ class LocalstackDockerEnvironment:
                 "error": f"Validation script not found: {script_path}",
             }
 
-        # Environment for boto3 to use localstack
         env_vars = {
             "AWS_ACCESS_KEY_ID": "test",
             "AWS_SECRET_ACCESS_KEY": "test",
@@ -314,7 +269,6 @@ class LocalstackDockerEnvironment:
             "AWS_ENDPOINT_URL": f"http://{self.localstack_container_name}:4566",
         }
 
-        # Build command to run validation script
         cmd = [
             "docker", "run", "--rm",
             "--network", self.network_name,
@@ -356,11 +310,130 @@ class LocalstackDockerEnvironment:
                 "output": "",
             }
 
+    def execute_setup_script(
+        self,
+        setup_script: str,
+        region: str = "us-east-1",
+    ) -> Dict[str, Any]:
+        """Execute a setup script for pre-existing infrastructure in a Docker container."""
+        setup_script_path = Path(setup_script)
+
+        if not setup_script_path.exists():
+            return {
+                "success": False,
+                "error": f"Setup script not found: {setup_script}",
+            }
+
+        # Copy setup script to working directory
+        work_dir = self.work_dir
+        setup_script_copy = work_dir / "setup.sh"
+        shutil.copy(setup_script_path, setup_script_copy)
+
+        # Copy lambda_code directory if it exists
+        lambda_code_dir = setup_script_path.parent / "lambda_code"
+        if lambda_code_dir.exists():
+            dest_lambda_code_dir = work_dir / "lambda_code"
+            if dest_lambda_code_dir.exists():
+                shutil.rmtree(dest_lambda_code_dir)
+            shutil.copytree(lambda_code_dir, dest_lambda_code_dir)
+
+        default_env = {
+            "AWS_ACCESS_KEY_ID": "test",
+            "AWS_SECRET_ACCESS_KEY": "test",
+            "AWS_DEFAULT_REGION": region,
+            "AWS_ENDPOINT_URL": f"http://{self.localstack_container_name}:4566",
+        }
+
+        cmd = [
+            "docker", "run", "--rm",
+            "--network", self.network_name,
+            "-v", f"{work_dir.absolute()}:/workspace",
+            "-w", "/workspace",
+        ]
+
+        for key, value in default_env.items():
+            cmd.extend(["-e", f"{key}={value}"])
+
+        command = "apk add --no-cache aws-cli bash zip && chmod +x /workspace/setup.sh && /bin/bash /workspace/setup.sh"
+        cmd.extend(["golang:alpine", "sh", "-c", command])
+
+        self.logger.debug(f"Running setup script: {shlex.join(cmd)}")
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300,
+            )
+
+            return {
+                "success": result.returncode == 0,
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+
+        except subprocess.TimeoutExpired:
+            return {
+                "success": False,
+                "error": "Setup script timed out after 5 minutes",
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "error": str(e),
+            }
+
+    def execute_cleanup_script(
+        self,
+        cleanup_script: str,
+        region: str = "us-east-1",
+    ) -> Dict[str, Any]:
+        """Execute a cleanup script in a Docker container."""
+        cleanup_script_path = Path(cleanup_script)
+
+        if not cleanup_script_path.exists():
+            return {"success": False, "error": "Cleanup script not found"}
+
+        work_dir = self.work_dir
+        cleanup_script_copy = work_dir / "cleanup.sh"
+        shutil.copy(cleanup_script_path, cleanup_script_copy)
+
+        default_env = {
+            "AWS_ACCESS_KEY_ID": "test",
+            "AWS_SECRET_ACCESS_KEY": "test",
+            "AWS_DEFAULT_REGION": region,
+            "AWS_ENDPOINT_URL": f"http://{self.localstack_container_name}:4566",
+        }
+
+        cmd = [
+            "docker", "run", "--rm",
+            "--network", self.network_name,
+            "-v", f"{work_dir.absolute()}:/workspace",
+            "-w", "/workspace",
+        ]
+
+        for key, value in default_env.items():
+            cmd.extend(["-e", f"{key}={value}"])
+
+        command = "apk add --no-cache aws-cli bash && chmod +x /workspace/cleanup.sh && /bin/bash /workspace/cleanup.sh"
+        cmd.extend(["alpine:latest", "sh", "-c", command])
+
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            return {
+                "success": result.returncode == 0,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+            }
+        except Exception as e:
+            return {"success": False, "error": str(e)}
+
     def cleanup(self) -> None:
         """Stop and remove all containers and network."""
         self.logger.info("Cleaning up docker resources...")
 
-        # Stop localstack
         if self.localstack_container_id:
             cmd = ["docker", "stop", self.localstack_container_id]
             subprocess.run(cmd, capture_output=True, timeout=60)
@@ -368,7 +441,6 @@ class LocalstackDockerEnvironment:
             cmd = ["docker", "rm", "-f", self.localstack_container_id]
             subprocess.run(cmd, capture_output=True, timeout=30)
 
-        # Remove network
         if self.network_name:
             cmd = ["docker", "network", "rm", self.network_name]
             subprocess.run(cmd, capture_output=True, timeout=30)
@@ -376,16 +448,13 @@ class LocalstackDockerEnvironment:
         self.logger.info("Cleanup complete")
 
     def __enter__(self):
-        """Context manager entry."""
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit with cleanup."""
         self.cleanup()
         return False
 
     def __del__(self):
-        """Cleanup on deletion."""
         try:
             self.cleanup()
         except Exception:

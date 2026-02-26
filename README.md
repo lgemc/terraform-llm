@@ -32,23 +32,111 @@ Each stage produces a score between 0.0 and 1.0. The plan stage compares actual 
 
 ```
 terraform_llm/
-  datasets/          # Benchmark data layer
-    schema.py        # BenchmarkInstance, difficulty levels, validation
-    dataset.py       # HuggingFace-style Dataset class (filter, map, split)
-    loader.py        # JSONL loading, streaming, save/export
-  agent/             # Evaluation runner
-    models.py        # LLM abstraction via litellm (any provider)
-    environment.py   # Terraform subprocess execution in temp dirs
-    evaluator.py     # Graded scoring pipeline + resource comparison
-    agent.py         # run_instance, run_benchmark (~60 lines of core logic)
-    results.py       # StageResult, InstanceResult, BenchmarkReport
+  datasets/                  # Benchmark data layer
+    schema.py                # BenchmarkInstance, difficulty levels, validation
+    dataset.py               # HuggingFace-style Dataset class (filter, map, split)
+    loader.py                # JSONL loading, streaming, save/export
+  agent/                     # Evaluation runner
+    models.py                # LLM abstraction via litellm (any provider)
+    environment.py           # Terraform execution (local subprocess or Docker)
+    docker_environment.py    # Docker + LocalStack environment management
+    evaluator.py             # Graded scoring pipeline + resource comparison
+    agent.py                 # run_instance, run_benchmark
+    results.py               # StageResult, InstanceResult, BenchmarkReport
+  cli/                       # Command-line interface
+    benchmark.py             # benchmark command
+    generate.py              # generate command
 ```
 
 ## Quick start
 
 ```bash
 pip install -e .
+# or
+uv sync
 ```
+
+## CLI usage
+
+All commands are available via `uv run python -m terraform_llm.cli` (or the installed entry point if configured).
+
+### `benchmark` — Run the evaluation pipeline
+
+Run the benchmark against a dataset. By default, Terraform runs inside Docker with LocalStack for isolated AWS mocking.
+
+```bash
+# Basic run with Docker + LocalStack (default)
+uv run python -m terraform_llm.cli benchmark dataset/ -o output --model anthropic/claude-sonnet-4-5-20250929
+
+# Run without Docker (requires Terraform CLI on host)
+uv run python -m terraform_llm.cli benchmark dataset/ -o output --model anthropic/claude-sonnet-4-5-20250929 --no-docker
+
+# Run a specific instance
+uv run python -m terraform_llm.cli benchmark dataset/ -o output --instance-id terraform-aws-s3-001
+
+# Filter by difficulty, provider, or tags
+uv run python -m terraform_llm.cli benchmark dataset/ -o output --difficulty easy --provider aws --tag s3 --limit 5
+
+# Full apply mode (deploys real infrastructure via LocalStack, then validates and destroys)
+uv run python -m terraform_llm.cli benchmark dataset/ -o output --run-apply
+
+# Skip code generation — reuse .tf files already in the output directory
+uv run python -m terraform_llm.cli benchmark dataset/ -o output --skip-generation
+
+# Custom Docker images
+uv run python -m terraform_llm.cli benchmark dataset/ -o output \
+  --terraform-image hashicorp/terraform:1.6 \
+  --localstack-image localstack/localstack:3.0
+```
+
+**Options:**
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `DATASET` (argument) | required | Path to JSONL dataset file or directory |
+| `-o`, `--output-dir` | `output` | Output directory |
+| `--model` | `anthropic/claude-3-5-sonnet-20241022` | Model identifier (any litellm-supported model) |
+| `--docker` / `--no-docker` | `--docker` | Use Docker + LocalStack for isolated execution |
+| `--terraform-image` | `hashicorp/terraform:latest` | Docker image for Terraform |
+| `--localstack-image` | `localstack/localstack:latest` | Docker image for LocalStack |
+| `--run-apply` | off | Run terraform apply (creates infrastructure) |
+| `--skip-generation` | off | Reuse existing .tf files from output directory |
+| `-i`, `--instance-id` | none | Run a specific instance by ID |
+| `--difficulty` | none | Filter by difficulty (easy, medium, hard) |
+| `-p`, `--provider` | none | Filter by cloud provider (aws, azure, gcp) |
+| `--tag` | none | Filter by tags (repeatable) |
+| `--limit` | none | Max number of instances to run |
+| `--temperature` | `0.0` | Model temperature |
+| `-v`, `--verbose` | off | Verbose output |
+
+### `generate` — Generate Terraform code from a prompt
+
+Generate Terraform files from a natural language description, optionally validating them.
+
+```bash
+# Generate and validate
+uv run python -m terraform_llm.cli generate "Create an S3 bucket with versioning" -o output
+
+# Generate without validation
+uv run python -m terraform_llm.cli generate "Create a VPC with public subnets" -o output --no-validate
+
+# Use a different model
+uv run python -m terraform_llm.cli generate "Create a Lambda function" -o output --model openai/gpt-4o
+```
+
+### `list` — List instances in a dataset
+
+```bash
+uv run python -m terraform_llm.cli list dataset/
+```
+
+### `traces` — View execution traces
+
+```bash
+uv run python -m terraform_llm.cli traces output/
+```
+
+## Python API
 
 ### Run the benchmark
 
@@ -65,6 +153,19 @@ config = EvalConfig(run_apply=False)  # plan-only mode (no real infra created)
 report = run_benchmark(dataset, model, config)
 print(f"Mean score: {report.mean_score:.2f}")
 print(f"Stage pass rates: {report.stage_pass_rates()}")
+```
+
+### Run with Docker + LocalStack
+
+```python
+config = EvalConfig(
+    run_apply=True,
+    use_docker=True,
+    terraform_image="hashicorp/terraform:latest",
+    localstack_image="localstack/localstack:latest",
+)
+
+report = run_benchmark(dataset, model, config)
 ```
 
 ### Compare models
@@ -107,7 +208,9 @@ Each instance in the JSONL dataset looks like:
 | Mode | Flag | What happens |
 |---|---|---|
 | **Plan only** (default) | `run_apply=False` | Runs init/validate/plan. No real infrastructure. Free. |
-| **Full apply** | `run_apply=True` | Deploys real infrastructure, runs validation, destroys after. Costs money. |
+| **Full apply** | `run_apply=True` | Deploys real infrastructure, runs validation, destroys after. |
+| **Docker** (default) | `--docker` | Runs Terraform in Docker with LocalStack. Isolated, no real AWS costs. |
+| **Local** | `--no-docker` | Runs Terraform directly on the host. Requires Terraform CLI installed. |
 
 ## Scoring
 
@@ -133,5 +236,6 @@ A model that gets to `plan` with correct resources but fails `apply` scores much
 ## Requirements
 
 - Python >= 3.12
-- Terraform CLI installed and on PATH
+- Docker (for default isolated execution with LocalStack)
+- Terraform CLI (only needed with `--no-docker` mode)
 - API keys for whichever model provider you want to evaluate (set via environment variables)

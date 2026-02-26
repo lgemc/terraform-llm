@@ -14,6 +14,7 @@ from terraform_llm.agent.models import (
 from terraform_llm.agent.environment import (
     TerraformEnvironment,
     CommandResult,
+    create_terraform_files,
 )
 from terraform_llm.agent.evaluator import (
     EvalConfig,
@@ -23,6 +24,9 @@ from terraform_llm.agent.evaluator import (
 from terraform_llm.agent.agent import (
     run_instance,
     run_benchmark,
+)
+from terraform_llm.agent.docker_environment import (
+    LocalstackDockerEnvironment,
 )
 
 __all__ = [
@@ -35,9 +39,11 @@ __all__ = [
     "parse_hcl_response",
     "TerraformEnvironment",
     "CommandResult",
+    "create_terraform_files",
     "EvalConfig",
     "evaluate_instance",
     "score_plan",
     "run_instance",
     "run_benchmark",
+    "LocalstackDockerEnvironment",
 ]
