@@ -26,7 +26,7 @@ class StageResult:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
-        return {
+        d = {
             "stage": self.stage,
             "status": self.status.value,
             "score": self.score,
@@ -34,6 +34,9 @@ class StageResult:
             "duration_seconds": self.duration_seconds,
             "details": self.details,
         }
+        if self.raw_output:
+            d["output"] = self.raw_output
+        return d
 
 
 STAGE_WEIGHTS = {
@@ -55,13 +58,19 @@ class InstanceResult:
     total_score: float = 0.0
     error: Optional[str] = None
 
+    # Stages that are excluded from scoring (infrastructure setup, not model quality)
+    _UNSCORED_STAGES = {"setup_script", "cleanup_script", "destroy"}
+
     def compute_total_score(self) -> float:
         """Compute weighted total score across stages."""
         total_weight = 0.0
         weighted_sum = 0.0
         for stage in self.stages:
-            if stage.status != StageStatus.SKIPPED:
-                w = STAGE_WEIGHTS.get(stage.stage, 0.1)
+            if stage.status == StageStatus.SKIPPED:
+                continue
+            if stage.stage in self._UNSCORED_STAGES:
+                continue
+            w = STAGE_WEIGHTS.get(stage.stage, 0.1)
                 weighted_sum += stage.score * w
                 total_weight += w
         self.total_score = weighted_sum / total_weight if total_weight > 0 else 0.0
