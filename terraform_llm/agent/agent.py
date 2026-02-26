@@ -16,6 +16,7 @@ def run_instance(
     instance: BenchmarkInstance,
     model_config: ModelConfig,
     eval_config: Optional[EvalConfig] = None,
+    work_dir: Optional[str] = None,
 ) -> InstanceResult:
     """
     Run a single benchmark instance: generate HCL, then evaluate.
@@ -24,6 +25,7 @@ def run_instance(
         instance: Benchmark instance to evaluate
         model_config: LLM configuration
         eval_config: Evaluation pipeline configuration (defaults to plan-only)
+        work_dir: Optional directory for terraform files (persists output if provided)
 
     Returns:
         InstanceResult with all stage scores
@@ -51,7 +53,7 @@ def run_instance(
         )
 
     # Step 2: Evaluate generated HCL
-    result = evaluate_instance(instance, generated_files, eval_config)
+    result = evaluate_instance(instance, generated_files, eval_config, work_dir=work_dir)
     result.model = model_config.model
     result.compute_total_score()
 
