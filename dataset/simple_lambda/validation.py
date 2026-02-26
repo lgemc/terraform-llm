@@ -2,6 +2,8 @@
 
 import os
 import boto3
+import json
+import sys
 from typing import Dict, Any
 
 
@@ -9,11 +11,6 @@ class TestLambdaInfrastructure:
     """Validate simple Lambda function with IAM role."""
 
     def __init__(self, region: str = 'us-east-1', endpoint_url: str = None):
-        """Initialize test with AWS region."""
-        self.region = region
-        self.endpoint_url = endpoint_url
-
-        # Create boto3 clients with optional endpoint_url for LocalStack
         client_kwargs = {'region_name': region}
         if endpoint_url:
             client_kwargs['endpoint_url'] = endpoint_url
@@ -24,27 +21,17 @@ class TestLambdaInfrastructure:
         self._role_name = None
 
     def validate(self) -> Dict[str, Any]:
-        """
-        Run all validation checks for Lambda infrastructure.
-
-        Returns:
-            Dictionary with:
-                - passed: bool (overall pass/fail)
-                - tests: dict of individual test results
-                - errors: list of error messages
-        """
         results = {
             'passed': True,
             'tests': {},
             'errors': []
         }
 
-        # Run each test
         test_methods = [
             ('lambda_exists', self.test_lambda_exists),
             ('lambda_name_correct', self.test_lambda_name_correct),
             ('lambda_runtime', self.test_lambda_runtime),
-            ('lambda_s3_deployment', self.test_lambda_s3_deployment),
+            ('lambda_handler', self.test_lambda_handler),
             ('iam_role_exists', self.test_iam_role_exists),
             ('iam_assume_role_policy', self.test_iam_assume_role_policy),
             ('iam_policy_attachment', self.test_iam_policy_attachment),
@@ -79,42 +66,22 @@ class TestLambdaInfrastructure:
             raise AssertionError("Lambda function 'hello_world' not found")
 
     def test_lambda_runtime(self):
-        """Check Lambda function uses Go runtime (provided.al2 or go1.x)."""
+        """Check Lambda function uses Python 3.12 runtime."""
         if not self._function:
             self.test_lambda_name_correct()
 
         runtime = self._function.get('Runtime', '')
-        valid_runtimes = ['provided.al2', 'go1.x']
-        assert runtime in valid_runtimes, \
-            f"Lambda runtime is '{runtime}', expected one of {valid_runtimes}"
+        assert runtime == 'python3.12', \
+            f"Lambda runtime is '{runtime}', expected 'python3.12'"
 
-    def test_lambda_s3_deployment(self):
-        """Check Lambda function uses S3 deployment (not local file)."""
+    def test_lambda_handler(self):
+        """Check Lambda function handler is handler.handler."""
         if not self._function:
             self.test_lambda_name_correct()
 
-        # Get function code location
-        try:
-            code_info = self.lambda_client.get_function(FunctionName='hello_world')
-            code = code_info.get('Code', {})
-
-            # Check that S3 location is present
-            s3_bucket = self._function.get('CodeSha256')  # This will exist for any deployment
-            assert s3_bucket, "Lambda function does not have code"
-
-            # The function configuration should not have a local file reference
-            # Instead, it should have been deployed from S3
-            # We can verify this by checking the Code section
-            repository_type = code.get('RepositoryType')
-            if repository_type:
-                assert repository_type == 'S3', \
-                    f"Lambda deployed from {repository_type}, expected S3"
-
-        except Exception as e:
-            # If we can't verify deployment method conclusively, just check handler
-            handler = self._function.get('Handler', '')
-            assert handler == 'bootstrap', \
-                f"Lambda handler is '{handler}', expected 'bootstrap' for Go Lambda"
+        handler = self._function.get('Handler', '')
+        assert handler == 'handler.handler', \
+            f"Lambda handler is '{handler}', expected 'handler.handler'"
 
     def test_iam_role_exists(self):
         """Check IAM role exists for Lambda function."""
@@ -124,7 +91,6 @@ class TestLambdaInfrastructure:
         role_arn = self._function.get('Role')
         assert role_arn, "Lambda function does not have an IAM role"
 
-        # Extract role name from ARN
         self._role_name = role_arn.split('/')[-1]
 
         try:
@@ -140,7 +106,6 @@ class TestLambdaInfrastructure:
         role = self.iam.get_role(RoleName=self._role_name)
         assume_role_policy = role['Role']['AssumeRolePolicyDocument']
 
-        # Check that Lambda service can assume the role
         statements = assume_role_policy.get('Statement', [])
         assert statements, "No statements in AssumeRole policy"
 
@@ -168,20 +133,11 @@ class TestLambdaInfrastructure:
 
 
 if __name__ == '__main__':
-    """Run validation tests."""
-    import sys
-    import json
-
-    # Get endpoint URL from environment (for LocalStack support)
     endpoint_url = os.environ.get('AWS_ENDPOINT_URL')
     region = os.environ.get('AWS_DEFAULT_REGION', 'us-east-1')
 
-    # Run validation
     validator = TestLambdaInfrastructure(region=region, endpoint_url=endpoint_url)
     results = validator.validate()
 
-    # Print results as JSON
     print(json.dumps(results, indent=2))
-
-    # Exit with appropriate code
     sys.exit(0 if results['passed'] else 1)

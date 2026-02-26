@@ -56,40 +56,50 @@ def evaluate_instance(
     # Create Docker environment if requested
     docker_env = None
     if config.use_docker:
+        _log("  Starting Docker + LocalStack environment...")
         from terraform_llm.agent.docker_environment import LocalstackDockerEnvironment
         docker_env = LocalstackDockerEnvironment(
             work_dir=work_dir or "/tmp/terraform-bench-placeholder",
             image=config.terraform_image,
             localstack_image=config.localstack_image,
         )
+        _log("  Docker environment ready")
 
     try:
         with TerraformEnvironment(work_dir=work_dir, docker_env=docker_env) as env:
             env.setup(generated_files)
+            _log(f"  Writing {len(generated_files)} file(s): {', '.join(generated_files.keys())}")
 
             # Stage 0: setup script (optional, before terraform)
             if instance.setup_script:
+                _log("  Running setup script...")
                 setup_result = env.run_setup_script(instance.setup_script, region=instance.region)
                 result.stages.append(setup_result)
+                _log_stage_result("setup_script", setup_result)
                 if setup_result.status != StageStatus.PASSED:
                     _skip_remaining(result, ["init", "validate", "plan", "apply", "validation_script"])
                     return result
 
             # Stage 1: init
+            _log("  Running terraform init...")
             init_result = env.terraform_init(timeout=config.init_timeout)
             result.stages.append(init_result)
+            _log_stage_result("init", init_result)
             if init_result.status != StageStatus.PASSED:
                 _skip_remaining(result, ["validate", "plan", "apply", "validation_script"])
                 return result
 
             # Stage 2: validate
+            _log("  Running terraform validate...")
             validate_result = env.terraform_validate()
             result.stages.append(validate_result)
+            _log_stage_result("validate", validate_result)
             if validate_result.status != StageStatus.PASSED:
                 _skip_remaining(result, ["plan", "apply", "validation_script"])
                 return result
 
             # Stage 3: plan
+            _log("  Running terraform plan...")
             plan_result = env.terraform_plan(timeout=config.plan_timeout)
             result.stages.append(plan_result)
 
@@ -101,41 +111,65 @@ def evaluate_instance(
                 plan_result.message = message
                 if score < 1.0:
                     plan_result.status = StageStatus.PASSED  # still passed, just partial score
+                _log_stage_result("plan", plan_result)
             else:
+                _log_stage_result("plan", plan_result)
                 _skip_remaining(result, ["apply", "validation_script"])
                 return result
 
             # Stage 4: apply (optional)
             if config.run_apply:
+                _log("  Running terraform apply...")
                 apply_result = env.terraform_apply(timeout=config.apply_timeout)
                 result.stages.append(apply_result)
+                _log_stage_result("apply", apply_result)
 
                 if apply_result.status != StageStatus.PASSED:
                     _skip_remaining(result, ["validation_script"])
                     # Still try to destroy
                     if config.run_destroy:
+                        _log("  Running terraform destroy (cleanup after failed apply)...")
                         env.terraform_destroy()
                     _run_cleanup_if_needed(env, instance)
                     return result
 
                 # Stage 5: validation script (optional)
                 if config.run_validation and instance.validation_script:
+                    _log("  Running validation script...")
                     validation_result = env.run_validation_script(instance.validation_script)
                     result.stages.append(validation_result)
+                    _log_stage_result("validation_script", validation_result)
 
                 # Stage 6: destroy
                 if config.run_destroy:
+                    _log("  Running terraform destroy...")
                     destroy_result = env.terraform_destroy()
-                    logger.info(f"Destroy: {destroy_result.status.value}")
+                    _log_stage_result("destroy", destroy_result)
 
             _run_cleanup_if_needed(env, instance)
 
     finally:
         # Clean up Docker resources
         if docker_env is not None:
+            _log("  Cleaning up Docker resources...")
             docker_env.cleanup()
 
     return result
+
+
+def _log(message: str) -> None:
+    """Print a progress message to stdout and log it."""
+    print(message)
+    logger.info(message.strip())
+
+
+def _log_stage_result(stage_name: str, stage_result: StageResult) -> None:
+    """Log the result of a stage."""
+    status = stage_result.status.value
+    duration = f" ({stage_result.duration_seconds:.1f}s)" if stage_result.duration_seconds else ""
+    msg = stage_result.message
+    score_str = f" score={stage_result.score:.2f}" if stage_result.score < 1.0 else ""
+    _log(f"    {stage_name}: {status}{duration}{score_str} — {msg}")
 
 
 def _run_cleanup_if_needed(env: TerraformEnvironment, instance: BenchmarkInstance) -> None:
