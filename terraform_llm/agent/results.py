@@ -71,8 +71,8 @@ class InstanceResult:
             if stage.stage in self._UNSCORED_STAGES:
                 continue
             w = STAGE_WEIGHTS.get(stage.stage, 0.1)
-                weighted_sum += stage.score * w
-                total_weight += w
+            weighted_sum += stage.score * w
+            total_weight += w
         self.total_score = weighted_sum / total_weight if total_weight > 0 else 0.0
         return self.total_score
 

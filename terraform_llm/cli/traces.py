@@ -45,62 +45,69 @@ def render_output(output: str, title: str = "Output") -> None:
     console.print(Panel(text, title=title, border_style="cyan"))
 
 
-def display_single_step(step: Dict[str, Any], step_number: int) -> None:
-    """Display a single step with detailed formatting."""
-    step_name = step.get("step", "unknown")
-    status = step.get("status", "unknown")
-    duration = step.get("duration", 0)
-    timestamp = step.get("timestamp", "")
+def display_single_stage(stage: Dict[str, Any], stage_number: int) -> None:
+    """Display a single stage with detailed formatting."""
+    stage_name = stage.get("stage", "unknown")
+    status = stage.get("status", "unknown")
+    duration = stage.get("duration_seconds", 0)
+    score = stage.get("score", 0.0)
+    message = stage.get("message", "")
 
     # Status color
     status_color = {
-        "success": "green",
         "passed": "green",
         "failed": "red",
-        "error": "red",
-    }.get(status, "yellow")
+        "skipped": "yellow",
+    }.get(status, "white")
 
     # Create header
-    header = f"""[bold cyan]Step {step_number}:[/bold cyan] {step_name}
+    header = f"""[bold cyan]Stage {stage_number}:[/bold cyan] {stage_name}
 [bold cyan]Status:[/bold cyan] [{status_color}]{status}[/{status_color}]
+[bold cyan]Score:[/bold cyan] {score:.2f}
 [bold cyan]Duration:[/bold cyan] {duration:.2f}s
-[bold cyan]Timestamp:[/bold cyan] {timestamp}"""
+[bold cyan]Message:[/bold cyan] {message}"""
 
-    if "command" in step:
-        header += f"\n[bold cyan]Command:[/bold cyan] {step['command']}"
-
-    console.print(Panel(header, title="Step Details", border_style="cyan"))
+    console.print(Panel(header, title="Stage Details", border_style="cyan"))
     console.print()
 
     # Display output if present
-    if "output" in step and step["output"]:
-        render_output(step["output"], "Output")
+    if "output" in stage and stage["output"]:
+        render_output(stage["output"], "Output")
         console.print()
 
-    # Display stderr if present
-    if "stderr" in step and step["stderr"]:
-        render_output(step["stderr"], "Stderr")
-        console.print()
+    # Display details if present (e.g., diagnostics for validation stage)
+    details = stage.get("details", {})
+    if details:
+        # Special handling for diagnostics
+        if "diagnostics" in details:
+            console.print("[bold red]Diagnostics:[/bold red]")
+            for diag in details["diagnostics"]:
+                severity = diag.get("severity", "unknown")
+                summary = diag.get("summary", "")
+                detail = diag.get("detail", "")
+                snippet = diag.get("snippet", {})
 
-    # Display error if present
-    if "error" in step:
-        console.print(Panel(
-            f"[red]{step['error']}[/red]",
-            title="Error",
-            border_style="red"
-        ))
-        console.print()
+                severity_color = "red" if severity == "error" else "yellow"
 
-    # Display additional fields
-    excluded_keys = {"step", "status", "duration", "timestamp", "command", "output", "stderr", "error"}
-    other_fields = {k: v for k, v in step.items() if k not in excluded_keys}
+                diag_text = f"[{severity_color}]{severity.upper()}[/{severity_color}]: {summary}\n{detail}"
 
-    if other_fields:
-        console.print(Panel(
-            Syntax(json.dumps(other_fields, indent=2), "json", theme="monokai"),
-            title="Additional Fields",
-            border_style="magenta"
-        ))
+                if snippet:
+                    context = snippet.get("context", "")
+                    code = snippet.get("code", "")
+                    if context:
+                        diag_text += f"\n\n[dim]Context: {context}[/dim]"
+                    if code:
+                        diag_text += f"\n[dim]{code}[/dim]"
+
+                console.print(Panel(diag_text, border_style=severity_color))
+            console.print()
+        else:
+            console.print(Panel(
+                Syntax(json.dumps(details, indent=2), "json", theme="monokai"),
+                title="Details",
+                border_style="magenta"
+            ))
+            console.print()
 
 
 def traces_command(
@@ -111,17 +118,17 @@ def traces_command(
     show_messages: bool = typer.Option(
         False,
         "--messages", "-m",
-        help="Show full message history from trace"
+        help="Show generated Terraform files from trace"
     ),
     show_steps: bool = typer.Option(
         False,
         "--steps", "-s",
-        help="Show execution steps from trace"
+        help="Show execution stages from trace"
     ),
     step: Optional[str] = typer.Option(
         None,
         "--step",
-        help="Show a specific step by name (e.g., 'terraform_validate') or number (1-indexed)"
+        help="Show a specific stage by name (e.g., 'validate', 'plan') or number (1-indexed)"
     ),
     json_output: bool = typer.Option(
         False,
@@ -134,24 +141,21 @@ def traces_command(
 
     Examples:
 
-        # Show summary from a trace directory
-        terraform-llm traces traces/2026-02-24_19_41_13/
+        # Show trace file
+        uv run python -m terraform_llm.cli traces output/qwen2.5-coder-3b/terraform-aws-lambda-001/terraform-aws-lambda-001.traj.json
 
-        # Show specific trace file
-        terraform-llm traces traces/2026-02-24_19_41_13/terraform-aws-lambda-vpc-001.json
+        # Show trace with raw JSON
+        uv run python -m terraform_llm.cli traces output/.../terraform-aws-lambda-001.traj.json --json
 
-        # Show summary with raw JSON
-        terraform-llm traces traces/2026-02-24_19_41_13/summary.json --json
+        # Show trace with generated Terraform files
+        uv run python -m terraform_llm.cli traces output/.../terraform-aws-lambda-001.traj.json --messages
 
-        # Show trace with full messages
-        terraform-llm traces traces/2026-02-24_19_41_13/terraform-aws-lambda-vpc-001.json --messages
+        # Show trace with execution stages
+        uv run python -m terraform_llm.cli traces output/.../terraform-aws-lambda-001.traj.json --steps
 
-        # Show trace with execution steps
-        terraform-llm traces traces/2026-02-24_19_41_13/terraform-aws-lambda-vpc-001.json --steps
-
-        # Show specific step with detailed output
-        terraform-llm traces traces/2026-02-24_19_41_13/terraform-aws-lambda-vpc-001.json --step terraform_validate
-        terraform-llm traces traces/2026-02-24_19_41_13/terraform-aws-lambda-vpc-001.json --step 4
+        # Show specific stage with detailed output
+        uv run python -m terraform_llm.cli traces output/.../terraform-aws-lambda-001.traj.json --step validate
+        uv run python -m terraform_llm.cli traces output/.../terraform-aws-lambda-001.traj.json --step 3
     """
     path = Path(trace_path)
 
@@ -249,13 +253,23 @@ def display_trace(trace_path: Path, show_messages: bool = False,
 
     # Display basic info
     instance_id = trace.get("instance_id", "unknown")
-    problem_statement = trace.get("problem_statement", "")
-    start_time = trace.get("start_time", "")
-    end_time = trace.get("end_time", "")
-
     info = trace.get("info", {})
-    exit_status = info.get("exit_status", "unknown")
-    passed = info.get("passed", False)
+    problem_statement = info.get("problem_statement", "")
+
+    # Get score and timing info
+    total_score = info.get("total_score", 0.0)
+    total_time = info.get("total_time_seconds", 0.0)
+    model = info.get("model", "unknown")
+    region = info.get("region", "unknown")
+
+    # Determine passed status from stages
+    stages = trace.get("stages", [])
+    all_passed = all(
+        stage.get("status") in ["passed", "skipped"]
+        for stage in stages
+    )
+    has_failure = any(stage.get("status") == "failed" for stage in stages)
+    passed = all_passed and not has_failure
 
     # Create header panel
     status_color = "green" if passed else "red"
@@ -263,35 +277,35 @@ def display_trace(trace_path: Path, show_messages: bool = False,
 
     header = f"""[bold cyan]Instance:[/bold cyan] {instance_id}
 [bold cyan]Status:[/bold cyan] [{status_color}]{status_text}[/{status_color}]
-[bold cyan]Exit Status:[/bold cyan] {exit_status}
-[bold cyan]Start Time:[/bold cyan] {start_time}
-[bold cyan]End Time:[/bold cyan] {end_time}"""
+[bold cyan]Score:[/bold cyan] {total_score:.2f}
+[bold cyan]Duration:[/bold cyan] {total_time:.2f}s
+[bold cyan]Model:[/bold cyan] {model}
+[bold cyan]Region:[/bold cyan] {region}"""
 
     console.print(Panel(header, title="Trace Overview", border_style="cyan"))
     console.print()
 
-    # If --step is specified, show only that step
-    steps = trace.get("steps", [])
+    # If --step is specified, show only that stage
     if step is not None:
         # Try to parse as number first
         try:
             step_num = int(step)
-            if step_num < 1 or step_num > len(steps):
-                console.print(f"[red]Error: Step {step_num} not found. Valid range: 1-{len(steps)}[/red]")
+            if step_num < 1 or step_num > len(stages):
+                console.print(f"[red]Error: Stage {step_num} not found. Valid range: 1-{len(stages)}[/red]")
                 raise typer.Exit(code=1)
-            display_single_step(steps[step_num - 1], step_num)
+            display_single_stage(stages[step_num - 1], step_num)
             return
         except ValueError:
-            # Not a number, treat as step name
-            for idx, s in enumerate(steps, 1):
-                if s.get("step") == step:
-                    display_single_step(s, idx)
+            # Not a number, treat as stage name
+            for idx, s in enumerate(stages, 1):
+                if s.get("stage") == step:
+                    display_single_stage(s, idx)
                     return
 
-            # Step name not found, show available steps
-            available_steps = [s.get("step", "unknown") for s in steps]
-            console.print(f"[red]Error: Step '{step}' not found.[/red]")
-            console.print(f"[yellow]Available steps: {', '.join(available_steps)}[/yellow]")
+            # Stage name not found, show available stages
+            available_stages = [s.get("stage", "unknown") for s in stages]
+            console.print(f"[red]Error: Stage '{step}' not found.[/red]")
+            console.print(f"[yellow]Available stages: {', '.join(available_stages)}[/yellow]")
             raise typer.Exit(code=1)
 
     # Display problem statement
@@ -299,46 +313,61 @@ def display_trace(trace_path: Path, show_messages: bool = False,
         console.print(Panel(problem_statement, title="Problem Statement", border_style="blue"))
         console.print()
 
-    # Display messages if requested
-    messages = trace.get("messages", [])
-    if show_messages and messages:
-        console.print("[bold cyan]Message History:[/bold cyan]")
-        for i, msg in enumerate(messages, 1):
-            role = msg.get("role", "unknown")
-            content = msg.get("content", "")
-            timestamp = msg.get("timestamp", "")
-            extra = msg.get("extra", {})
-
-            role_color = {
-                "system": "yellow",
-                "user": "blue",
-                "assistant": "green",
-                "error": "red"
-            }.get(role, "white")
-
-            msg_text = f"[{role_color}]{role.upper()}[/{role_color}] ({timestamp})"
-            if extra:
-                msg_text += f"\n[dim]{extra}[/dim]"
-            msg_text += f"\n{content}"
-
-            console.print(Panel(msg_text, border_style=role_color))
-        console.print()
-
-    # Display steps if requested
-    if show_steps and steps:
-        console.print("[bold cyan]Execution Steps:[/bold cyan]")
-        for i, step in enumerate(steps, 1):
-            step_text = json.dumps(step, indent=2)
+    # Display generated files if requested (replaces messages)
+    generated_files = trace.get("generated_files", {})
+    if show_messages and generated_files:
+        console.print("[bold cyan]Generated Files:[/bold cyan]")
+        for filename, content in generated_files.items():
             console.print(Panel(
-                Syntax(step_text, "json", theme="monokai"),
-                title=f"Step {i}",
-                border_style="magenta"
+                Syntax(content, "hcl", theme="monokai"),
+                title=f"File: {filename}",
+                border_style="blue"
             ))
         console.print()
 
+    # Display stages if requested (replaces steps)
+    if show_steps and stages:
+        console.print("[bold cyan]Execution Stages:[/bold cyan]")
+        for i, stage in enumerate(stages, 1):
+            display_single_stage(stage, i)
+        console.print()
+
+    # Display stages summary table
+    if not show_steps and stages:
+        table = Table(title="Stage Summary", box=box.ROUNDED)
+        table.add_column("Stage", style="cyan")
+        table.add_column("Status", justify="center")
+        table.add_column("Score", justify="right")
+        table.add_column("Duration", justify="right")
+        table.add_column("Message", style="dim")
+
+        for stage in stages:
+            stage_name = stage.get("stage", "unknown")
+            status = stage.get("status", "unknown")
+            score = stage.get("score", 0.0)
+            duration = stage.get("duration_seconds", 0.0)
+            message = stage.get("message", "")
+
+            status_color = {
+                "passed": "green",
+                "failed": "red",
+                "skipped": "yellow",
+            }.get(status, "white")
+
+            table.add_row(
+                stage_name,
+                f"[{status_color}]{status}[/{status_color}]",
+                f"{score:.2f}",
+                f"{duration:.2f}s",
+                message
+            )
+
+        console.print(table)
+        console.print()
+
     # Display summary counts
-    console.print(f"[dim]Messages: {len(messages)} | Steps: {len(steps)}[/dim]")
-    if not show_messages and messages:
-        console.print("[dim]Use --messages to view full message history[/dim]")
-    if not show_steps and steps:
-        console.print("[dim]Use --steps to view execution steps[/dim]")
+    console.print(f"[dim]Generated files: {len(generated_files)} | Stages: {len(stages)}[/dim]")
+    if not show_messages and generated_files:
+        console.print("[dim]Use --messages to view generated files[/dim]")
+    if not show_steps and stages:
+        console.print("[dim]Use --steps to view execution stages[/dim]")
