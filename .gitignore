@@ -62,3 +62,6 @@ outputs/
 tmp/
 temp/
 *.tmp
+
+# front
+node_modules/
