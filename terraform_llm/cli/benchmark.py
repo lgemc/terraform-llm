@@ -25,6 +25,27 @@ def benchmark_command(
         help="Model identifier (e.g., anthropic/claude-sonnet-4-5-20250929, openai/gpt-4o)",
     ),
     temperature: float = typer.Option(0.0, help="Model temperature"),
+    max_tokens: int = typer.Option(16384, help="Maximum tokens for model generation"),
+    agent_type: str = typer.Option(
+        "simple",
+        "--agent-type",
+        help="Agent type: 'simple' (direct generation) or 'tool-enabled' (with doc search)",
+    ),
+    max_tool_iterations: int = typer.Option(
+        5,
+        "--max-tool-iterations",
+        help="Maximum iterations for tool-enabled agent",
+    ),
+    docs_index_path: Optional[str] = typer.Option(
+        None,
+        "--docs-index-path",
+        help="Path to hybrid search index for tool-enabled agent (build with 'index-docs' command)",
+    ),
+    reasoning_effort: Optional[str] = typer.Option(
+        None,
+        "--reasoning-effort",
+        help="Reasoning effort for reasoning models (low, medium, high) - enables extended thinking",
+    ),
     difficulty: Optional[str] = typer.Option(None, help="Filter by difficulty"),
     filter_provider: Optional[str] = typer.Option(None, "--provider", "-p", help="Filter by cloud provider"),
     limit: Optional[int] = typer.Option(None, help="Limit number of instances"),
@@ -101,6 +122,11 @@ def benchmark_command(
     model_config = ModelConfig(
         model=model,
         temperature=temperature,
+        max_tokens=max_tokens,
+        agent_type=agent_type,
+        max_tool_iterations=max_tool_iterations,
+        docs_index_path=docs_index_path,
+        reasoning_effort=reasoning_effort,
     )
 
     # Create evaluation configuration
@@ -165,12 +191,18 @@ def benchmark_command(
                     "region": inst.region,
                     "expected_resources": inst.expected_resources,
                     "model": instance_result.model,
+                    "agent_type": model_config.agent_type,
                     "total_score": instance_result.total_score,
                     "total_time_seconds": time.time() - instance_start,
                 },
+                "model_config": model_config.to_dict(),
                 "generated_files": instance_result.generated_files,
                 "stages": [s.to_dict() for s in instance_result.stages],
             }
+            if instance_result.prompt:
+                traj["prompt"] = instance_result.prompt
+            if instance_result.tool_calls:
+                traj["tool_calls"] = instance_result.tool_calls
             if instance_result.error:
                 traj["info"]["error"] = instance_result.error
 
@@ -222,8 +254,12 @@ def benchmark_command(
     for stage, rate in stage_rates.items():
         console.print(f"  {stage}: {rate:.1%}")
 
-    # Save aggregate results
+    # Save aggregate results with metadata
+    results_data = report.to_dict()
+    results_data["model_config"] = model_config.to_dict()
+    results_data["output_dir"] = str(output_base)
+
     results_path = output_base / "benchmark_results.json"
     with open(results_path, "w") as f:
-        json.dump(report.to_dict(), f, indent=2)
+        json.dump(results_data, f, indent=2)
     console.print(f"\n[green]Results saved to:[/green] {results_path}")

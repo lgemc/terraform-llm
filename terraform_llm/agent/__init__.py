@@ -11,6 +11,9 @@ from terraform_llm.agent.models import (
     generate_hcl,
     parse_hcl_response,
 )
+from terraform_llm.agent.tool_agent import (
+    generate_hcl_with_tools,
+)
 from terraform_llm.agent.environment import (
     TerraformEnvironment,
     CommandResult,
@@ -36,6 +39,7 @@ __all__ = [
     "BenchmarkReport",
     "ModelConfig",
     "generate_hcl",
+    "generate_hcl_with_tools",
     "parse_hcl_response",
     "TerraformEnvironment",
     "CommandResult",

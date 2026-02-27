@@ -57,6 +57,8 @@ class InstanceResult:
     generated_files: Dict[str, str] = field(default_factory=dict)
     total_score: float = 0.0
     error: Optional[str] = None
+    tool_calls: List[Dict[str, Any]] = field(default_factory=list)  # Track tool calls (RAG searches, etc.)
+    prompt: Optional[str] = None  # The actual prompt sent to the LLM
 
     # Stages that are excluded from scoring (infrastructure setup, not model quality)
     _UNSCORED_STAGES = {"setup_script", "cleanup_script", "destroy"}
@@ -78,7 +80,7 @@ class InstanceResult:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary."""
-        return {
+        result = {
             "instance_id": self.instance_id,
             "model": self.model,
             "total_score": self.total_score,
@@ -86,6 +88,11 @@ class InstanceResult:
             "generated_files": self.generated_files,
             "error": self.error,
         }
+        if self.tool_calls:
+            result["tool_calls"] = self.tool_calls
+        if self.prompt:
+            result["prompt"] = self.prompt
+        return result
 
 
 @dataclass

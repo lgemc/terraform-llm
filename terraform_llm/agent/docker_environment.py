@@ -61,6 +61,9 @@ class LocalstackDockerEnvironment:
             self.localstack_container_id, self.localstack_container_name = existing
             self.logger.info(f"Reusing existing localstack container: {self.localstack_container_id} ({self.localstack_container_name})")
             self._connect_to_network(self.localstack_container_id, self.network_name)
+            # Wait for DNS to propagate on the new network
+            time.sleep(2)
+            self._verify_dns_resolution()
             self._wait_for_localstack()
             return
 
@@ -140,6 +143,36 @@ class LocalstackDockerEnvironment:
             if "already exists" not in result.stderr:
                 self.logger.warning(f"Failed to connect to network: {result.stderr}")
 
+    def _verify_dns_resolution(self) -> None:
+        """Verify that LocalStack container is resolvable via DNS on the network."""
+        self.logger.info(f"Verifying DNS resolution for {self.localstack_container_name}...")
+        max_retries = 10
+
+        for i in range(max_retries):
+            try:
+                # Use a lightweight alpine image to test DNS resolution
+                result = subprocess.run(
+                    [
+                        "docker", "run", "--rm",
+                        "--network", self.network_name,
+                        "alpine:latest",
+                        "sh", "-c", f"nslookup {self.localstack_container_name} || getent hosts {self.localstack_container_name}"
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+
+                if result.returncode == 0:
+                    self.logger.info(f"DNS resolution successful for {self.localstack_container_name}")
+                    return
+            except Exception as e:
+                self.logger.debug(f"DNS check attempt {i+1} failed: {e}")
+
+            time.sleep(1)
+
+        self.logger.warning(f"DNS verification failed after {max_retries} attempts, proceeding anyway")
+
     def _wait_for_localstack(self) -> None:
         """Wait for localstack to be ready."""
         max_retries = 60
@@ -195,7 +228,7 @@ class LocalstackDockerEnvironment:
         cmd = [
             "docker", "run", "--rm",
             "--network", self.network_name,
-            "-v", f"{self.work_dir.absolute()}:/workspace",
+            "--mount", f"type=bind,source={str(self.work_dir.absolute())},target=/workspace",
             "-w", "/workspace",
         ]
 
@@ -272,8 +305,8 @@ class LocalstackDockerEnvironment:
         cmd = [
             "docker", "run", "--rm",
             "--network", self.network_name,
-            "-v", f"{script_path.parent.absolute()}:/validation",
-            "-v", f"{self.work_dir.absolute()}:/workspace",
+            "--mount", f"type=bind,source={str(script_path.parent.absolute())},target=/validation,readonly",
+            "--mount", f"type=bind,source={str(self.work_dir.absolute())},target=/workspace",
             "-w", "/workspace",
         ]
 
@@ -347,7 +380,7 @@ class LocalstackDockerEnvironment:
         cmd = [
             "docker", "run", "--rm",
             "--network", self.network_name,
-            "-v", f"{work_dir.absolute()}:/workspace",
+            "--mount", f"type=bind,source={str(work_dir.absolute())},target=/workspace",
             "-w", "/workspace",
         ]
 
@@ -410,7 +443,7 @@ class LocalstackDockerEnvironment:
         cmd = [
             "docker", "run", "--rm",
             "--network", self.network_name,
-            "-v", f"{work_dir.absolute()}:/workspace",
+            "--mount", f"type=bind,source={str(work_dir.absolute())},target=/workspace",
             "-w", "/workspace",
         ]
 

@@ -6,6 +6,7 @@ from typing import Optional
 from terraform_llm.datasets.schema import BenchmarkInstance
 from terraform_llm.datasets.dataset import Dataset
 from terraform_llm.agent.models import ModelConfig, generate_hcl
+from terraform_llm.agent.tool_agent import generate_hcl_with_tools
 from terraform_llm.agent.evaluator import EvalConfig, evaluate_instance
 from terraform_llm.agent.results import InstanceResult, BenchmarkReport
 
@@ -36,15 +37,33 @@ def run_instance(
     logger.info(f"Running instance {instance.instance_id} with model {model_config.model}")
 
     # Step 1: Generate HCL from LLM
-    print(f"  Generating Terraform code with {model_config.model}...")
+    agent_type_display = f"{model_config.model} ({model_config.agent_type})"
+    print(f"  Generating Terraform code with {agent_type_display}...")
+    tool_call_trace = []
+    prompt = None
     try:
-        generated_files = generate_hcl(
-            config=model_config,
-            problem_statement=instance.problem_statement,
-            provider=instance.provider,
-            region=instance.region,
-            hints=instance.hints,
-        )
+        if model_config.agent_type == "tool-enabled":
+            generated_files, tool_call_trace, prompt = generate_hcl_with_tools(
+                model=model_config.model,
+                problem_statement=instance.problem_statement,
+                provider=instance.provider,
+                region=instance.region,
+                hints=instance.hints,
+                temperature=model_config.temperature,
+                max_tokens=model_config.max_tokens,
+                max_iterations=model_config.max_tool_iterations,
+                docs_index_path=model_config.docs_index_path,
+                reasoning_effort=model_config.reasoning_effort,
+            )
+        else:
+            # Default: simple agent
+            generated_files, prompt = generate_hcl(
+                config=model_config,
+                problem_statement=instance.problem_statement,
+                provider=instance.provider,
+                region=instance.region,
+                hints=instance.hints,
+            )
         print(f"  Generated {len(generated_files)} file(s): {', '.join(generated_files.keys())}")
     except Exception as e:
         print(f"  Generation failed: {e}")
@@ -59,6 +78,8 @@ def run_instance(
     print("  Evaluating generated code...")
     result = evaluate_instance(instance, generated_files, eval_config, work_dir=work_dir)
     result.model = model_config.model
+    result.tool_calls = tool_call_trace  # Attach tool call trace
+    result.prompt = prompt  # Attach the prompt
     result.compute_total_score()
 
     logger.info(f"Instance {instance.instance_id} score: {result.total_score:.2f}")
