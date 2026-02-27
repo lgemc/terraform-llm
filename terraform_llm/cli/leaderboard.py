@@ -39,6 +39,8 @@ def aggregate_benchmark_results(output_dir: Path) -> List[Dict[str, Any]]:
             stage_pass_rates = data.get("stage_pass_rates", {})
             num_instances = data.get("num_instances", 0)
             results = data.get("results", [])
+            model_config = data.get("model_config", {})
+            output_dir = data.get("output_dir", bench_file.parent)
 
             # Compute average time from individual results
             total_time = sum(r.get("total_score", 0) for r in results)
@@ -61,8 +63,17 @@ def aggregate_benchmark_results(output_dir: Path) -> List[Dict[str, Any]]:
                 )
             )
 
+            # Extract agent metadata
+            agent_type = model_config.get("agent_type", "simple")
+            has_rag = model_config.get("docs_index_path") is not None
+            reasoning_effort = model_config.get("reasoning_effort")
+
             aggregated.append({
                 "model": model,
+                "agent_type": agent_type,
+                "has_rag": has_rag,
+                "reasoning_effort": reasoning_effort,
+                "output_dir": str(output_dir),
                 "mean_score": mean_score,
                 "init_pass_rate": stage_pass_rates.get("init", 0.0),
                 "validate_pass_rate": stage_pass_rates.get("validate", 0.0),
@@ -152,6 +163,13 @@ def generate_html(data: List[Dict[str, Any]]) -> str:
                                 Model
                                 <span class="sort-indicator">↕</span>
                             </th>
+                            <th class="sortable px-6 py-3 text-left text-xs font-medium text-gray-700 uppercase tracking-wider" data-sort="agent_type">
+                                Agent
+                                <span class="sort-indicator">↕</span>
+                            </th>
+                            <th class="px-6 py-3 text-center text-xs font-medium text-gray-700 uppercase tracking-wider">
+                                RAG
+                            </th>
                             <th class="sortable px-6 py-3 text-right text-xs font-medium text-gray-700 uppercase tracking-wider" data-sort="mean_score">
                                 Mean Score
                                 <span class="sort-indicator active">↓</span>
@@ -228,6 +246,12 @@ def generate_html(data: List[Dict[str, Any]]) -> str:
                                  'text-red-600';
 
                 const passedRatio = `${{row.passed_instances}}/${{row.num_instances}}`;
+                const agentBadge = row.agent_type === 'tool-enabled' ?
+                    '<span class="px-2 py-1 text-xs rounded-full bg-blue-100 text-blue-800">tool</span>' :
+                    '<span class="px-2 py-1 text-xs rounded-full bg-gray-100 text-gray-800">simple</span>';
+                const ragIcon = row.has_rag ? '✓' : '-';
+                const ragColor = row.has_rag ? 'text-green-600' : 'text-gray-400';
+                const outputDir = row.output_dir ? row.output_dir.split('/').pop() : '-';
 
                 tr.innerHTML = `
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
@@ -235,6 +259,13 @@ def generate_html(data: List[Dict[str, Any]]) -> str:
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
                         ${{row.model}}
+                        <div class="text-xs text-gray-500 mt-1">${{outputDir}}</div>
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-left">
+                        ${{agentBadge}}
+                    </td>
+                    <td class="px-6 py-4 whitespace-nowrap text-sm text-center font-bold ${{ragColor}}">
+                        ${{ragIcon}}
                     </td>
                     <td class="px-6 py-4 whitespace-nowrap text-sm text-right font-bold ${{scoreColor}}">
                         ${{row.mean_score.toFixed(2)}}

@@ -26,7 +26,11 @@ class ModelConfig:
     """Configuration for an LLM model."""
     model: str
     temperature: float = 0.0
-    max_tokens: int = 4096
+    max_tokens: int = 16384
+    agent_type: str = "simple"  # "simple" or "tool-enabled"
+    max_tool_iterations: int = 5  # Max iterations for tool-enabled agent
+    docs_index_path: Optional[str] = None  # Path to hybrid search index for tool-enabled agent
+    reasoning_effort: Optional[str] = None  # Reasoning effort: "low", "medium", "high" (for reasoning models)
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -34,6 +38,10 @@ class ModelConfig:
             "model": self.model,
             "temperature": self.temperature,
             "max_tokens": self.max_tokens,
+            "agent_type": self.agent_type,
+            "max_tool_iterations": self.max_tool_iterations,
+            "docs_index_path": self.docs_index_path,
+            "reasoning_effort": self.reasoning_effort,
         }
 
 
@@ -43,7 +51,7 @@ def generate_hcl(
     provider: str,
     region: str,
     hints: Optional[list[str]] = None,
-) -> dict[str, str]:
+) -> tuple[dict[str, str], str]:
     """
     Generate Terraform HCL from a problem statement.
 
@@ -55,26 +63,40 @@ def generate_hcl(
         hints: Optional hints to include in the prompt
 
     Returns:
-        Dictionary mapping filenames to HCL content
+        Tuple of (generated_files, prompt)
+        - generated_files: Dictionary mapping filenames to HCL content
+        - prompt: The actual prompt sent to the LLM
     """
     user_content = f"Provider: {provider}\nRegion: {region}\n\n{problem_statement}"
     if hints:
         user_content += "\n\nHints:\n" + "\n".join(f"- {h}" for h in hints)
 
+    # Build full prompt for trace
+    full_prompt = f"System: {SYSTEM_PROMPT}\n\nUser: {user_content}"
+
     logger.info(f"Generating HCL with model {config.model}")
-    response = litellm.completion(
-        model=config.model,
-        messages=[
+
+    # Build completion kwargs
+    completion_kwargs = {
+        "model": config.model,
+        "messages": [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_content},
         ],
-        temperature=config.temperature,
-        max_tokens=config.max_tokens,
-    )
+        "temperature": config.temperature,
+        "max_tokens": config.max_tokens,
+    }
+
+    # Add reasoning effort for reasoning models (DeepSeek R1, o1, Claude 3.7+, gpt-oss)
+    if config.reasoning_effort:
+        completion_kwargs["reasoning_effort"] = config.reasoning_effort
+        logger.info(f"Using reasoning effort: {config.reasoning_effort}")
+
+    response = litellm.completion(**completion_kwargs)
 
     response_text = response.choices[0].message.content
     logger.debug(f"LLM response length: {len(response_text)} chars")
-    return parse_hcl_response(response_text)
+    return parse_hcl_response(response_text), full_prompt
 
 
 def parse_hcl_response(response_text: str) -> dict[str, str]:

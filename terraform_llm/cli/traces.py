@@ -10,10 +10,13 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.text import Text
+from rich.markdown import Markdown
 from rich import box
+from litellm import completion
 
 
 console = Console()
+traces_app = typer.Typer(help="Trace management and analysis commands")
 
 
 def strip_ansi_codes(text: str) -> str:
@@ -110,7 +113,8 @@ def display_single_stage(stage: Dict[str, Any], stage_number: int) -> None:
             console.print()
 
 
-def traces_command(
+@traces_app.command(name="show")
+def show_command(
     trace_path: str = typer.Argument(
         ...,
         help="Path to trace directory, summary file, or specific trace file"
@@ -142,20 +146,20 @@ def traces_command(
     Examples:
 
         # Show trace file
-        uv run python -m terraform_llm.cli traces output/qwen2.5-coder-3b/terraform-aws-lambda-001/terraform-aws-lambda-001.traj.json
+        uv run python -m terraform_llm.cli traces show output/qwen2.5-coder-3b/terraform-aws-lambda-001/terraform-aws-lambda-001.traj.json
 
         # Show trace with raw JSON
-        uv run python -m terraform_llm.cli traces output/.../terraform-aws-lambda-001.traj.json --json
+        uv run python -m terraform_llm.cli traces show output/.../terraform-aws-lambda-001.traj.json --json
 
         # Show trace with generated Terraform files
-        uv run python -m terraform_llm.cli traces output/.../terraform-aws-lambda-001.traj.json --messages
+        uv run python -m terraform_llm.cli traces show output/.../terraform-aws-lambda-001.traj.json --messages
 
         # Show trace with execution stages
-        uv run python -m terraform_llm.cli traces output/.../terraform-aws-lambda-001.traj.json --steps
+        uv run python -m terraform_llm.cli traces show output/.../terraform-aws-lambda-001.traj.json --steps
 
         # Show specific stage with detailed output
-        uv run python -m terraform_llm.cli traces output/.../terraform-aws-lambda-001.traj.json --step validate
-        uv run python -m terraform_llm.cli traces output/.../terraform-aws-lambda-001.traj.json --step 3
+        uv run python -m terraform_llm.cli traces show output/.../terraform-aws-lambda-001.traj.json --step validate
+        uv run python -m terraform_llm.cli traces show output/.../terraform-aws-lambda-001.traj.json --step 3
     """
     path = Path(trace_path)
 
@@ -371,3 +375,135 @@ def display_trace(trace_path: Path, show_messages: bool = False,
         console.print("[dim]Use --messages to view generated files[/dim]")
     if not show_steps and stages:
         console.print("[dim]Use --steps to view execution stages[/dim]")
+
+
+@traces_app.command(name="diagnose")
+def diagnose_command(
+    trace_path: str = typer.Argument(
+        ...,
+        help="Path to trace file (.traj.json)"
+    ),
+    model: str = typer.Option(
+        "anthropic/claude-sonnet-4-5-20250929",
+        "--model", "-m",
+        help="LLM model to use for diagnosis"
+    ),
+):
+    """
+    Diagnose why a model failed on a specific trace.
+
+    This command analyzes failed stages in a trace file and uses an LLM
+    to provide insights into why the model failed and what could be improved.
+
+    Examples:
+
+        # Diagnose with default model (Claude)
+        uv run python -m terraform_llm.cli traces diagnose output/gpt-oss:120b/terraform-aws-apigw-lambda-001/terraform-aws-apigw-lambda-001.traj.json
+
+        # Diagnose with specific model
+        uv run python -m terraform_llm.cli traces diagnose output/.../trace.traj.json --model gpt-4
+    """
+    path = Path(trace_path)
+
+    if not path.exists():
+        console.print(f"[red]Error: Trace file not found: {trace_path}[/red]")
+        raise typer.Exit(code=1)
+
+    try:
+        with open(path) as f:
+            trace = json.load(f)
+    except json.JSONDecodeError as e:
+        console.print(f"[red]Error: Invalid JSON in {path.name}: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    # Extract failed stages
+    stages = trace.get("stages", [])
+    failed_stages = [s for s in stages if s.get("status") == "failed"]
+
+    if not failed_stages:
+        console.print("[green]✓ No failed stages found in this trace.[/green]")
+        console.print("[dim]This trace appears to have passed all stages.[/dim]")
+        raise typer.Exit(code=0)
+
+    # Display failed stages summary
+    console.print(f"[red]Found {len(failed_stages)} failed stage(s)[/red]\n")
+
+    # Prepare diagnosis prompt
+    instance_id = trace.get("instance_id", "unknown")
+    problem_statement = trace.get("info", {}).get("problem_statement", "N/A")
+    generated_files = trace.get("generated_files", {})
+    model_used = trace.get("info", {}).get("model", "unknown")
+
+    # Build context for LLM
+    diagnosis_prompt = f"""You are a Terraform expert analyzing why an AI model failed to generate correct Terraform code.
+
+Instance ID: {instance_id}
+Model Used: {model_used}
+
+Problem Statement:
+{problem_statement}
+
+Generated Terraform Files:
+"""
+
+    for filename, content in generated_files.items():
+        diagnosis_prompt += f"\n--- {filename} ---\n{content}\n"
+
+    diagnosis_prompt += "\nFailed Stages:\n"
+
+    for idx, stage in enumerate(failed_stages, 1):
+        stage_name = stage.get("stage", "unknown")
+        message = stage.get("message", "")
+        output = strip_ansi_codes(stage.get("output", ""))
+        details = stage.get("details", {})
+
+        diagnosis_prompt += f"\n{idx}. Stage: {stage_name}\n"
+        diagnosis_prompt += f"   Message: {message}\n"
+
+        if output:
+            diagnosis_prompt += f"   Output:\n{output}\n"
+
+        if details:
+            diagnosis_prompt += f"   Details:\n{json.dumps(details, indent=2)}\n"
+
+    diagnosis_prompt += """
+
+Please analyze the failures and provide:
+1. Root cause(s) of each failure
+2. What the model did wrong in its Terraform code
+3. How to fix the issues
+4. General recommendations to avoid similar issues
+
+Be concise but thorough. Focus on actionable insights."""
+
+    # Call LLM for diagnosis
+    console.print("[cyan]Analyzing failures with LLM...[/cyan]\n")
+
+    try:
+        response = completion(
+            model=model,
+            messages=[
+                {"role": "user", "content": diagnosis_prompt}
+            ],
+            temperature=0.0,
+        )
+
+        diagnosis = response.choices[0].message.content
+
+        # Display diagnosis with markdown rendering
+        console.print(Panel(
+            Markdown(diagnosis),
+            title=f"[bold cyan]Diagnosis (by {model})[/bold cyan]",
+            border_style="cyan",
+            padding=(1, 2)
+        ))
+
+    except Exception as e:
+        console.print(f"[red]Error calling LLM: {e}[/red]")
+        raise typer.Exit(code=1)
+
+
+# Backward compatibility: keep traces_command as alias to show_command
+def traces_command(*args, **kwargs):
+    """Deprecated: use 'traces show' instead."""
+    return show_command(*args, **kwargs)
