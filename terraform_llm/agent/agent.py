@@ -36,6 +36,7 @@ def run_instance(
     logger.info(f"Running instance {instance.instance_id} with model {model_config.model}")
 
     # Step 1: Generate HCL from LLM
+    print(f"  Generating Terraform code with {model_config.model}...")
     try:
         generated_files = generate_hcl(
             config=model_config,
@@ -44,7 +45,9 @@ def run_instance(
             region=instance.region,
             hints=instance.hints,
         )
+        print(f"  Generated {len(generated_files)} file(s): {', '.join(generated_files.keys())}")
     except Exception as e:
+        print(f"  Generation failed: {e}")
         logger.error(f"LLM generation failed for {instance.instance_id}: {e}")
         return InstanceResult(
             instance_id=instance.instance_id,
@@ -53,6 +56,7 @@ def run_instance(
         )
 
     # Step 2: Evaluate generated HCL
+    print("  Evaluating generated code...")
     result = evaluate_instance(instance, generated_files, eval_config, work_dir=work_dir)
     result.model = model_config.model
     result.compute_total_score()
