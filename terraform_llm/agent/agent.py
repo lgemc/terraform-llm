@@ -18,6 +18,7 @@ def run_instance(
     model_config: ModelConfig,
     eval_config: Optional[EvalConfig] = None,
     work_dir: Optional[str] = None,
+    docker_env=None,
 ) -> InstanceResult:
     """
     Run a single benchmark instance: generate HCL, then evaluate.
@@ -27,6 +28,7 @@ def run_instance(
         model_config: LLM configuration
         eval_config: Evaluation pipeline configuration (defaults to plan-only)
         work_dir: Optional directory for terraform files (persists output if provided)
+        docker_env: Optional pre-created docker environment (for parallel execution)
 
     Returns:
         InstanceResult with all stage scores
@@ -76,7 +78,7 @@ def run_instance(
 
     # Step 2: Evaluate generated HCL
     print("  Evaluating generated code...")
-    result = evaluate_instance(instance, generated_files, eval_config, work_dir=work_dir)
+    result = evaluate_instance(instance, generated_files, eval_config, work_dir=work_dir, docker_env=docker_env)
     result.model = model_config.model
     result.tool_calls = tool_call_trace  # Attach tool call trace
     result.prompt = prompt  # Attach the prompt

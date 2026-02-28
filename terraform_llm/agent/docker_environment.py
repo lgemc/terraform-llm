@@ -74,12 +74,11 @@ class LocalstackDockerEnvironment:
             "--name", container_name,
             "--network", self.network_name,
             "-v", "/var/run/docker.sock:/var/run/docker.sock",
-            "-e", "SERVICES=s3,ec2,lambda,iam,dynamodb,rds,ecs,cloudfront,route53",
+            "-e", "SERVICES=s3,ec2,lambda,iam,dynamodb,rds,ecs,cloudfront,route53,events,apigateway",
             "-e", "DEBUG=1",
             "-e", "LS_LOG=trace",
             "-e", "LAMBDA_EXECUTOR=docker",
             "-e", "DOCKER_HOST=unix:///var/run/docker.sock",
-            "-p", "4566:4566",
             self.localstack_image,
         ]
 
@@ -120,7 +119,7 @@ class LocalstackDockerEnvironment:
         """Connect container to network if not already connected."""
         result = subprocess.run(
             ["docker", "inspect", container_id,
-             "--format", "{{range .NetworkSettings.Networks}}{{.NetworkID}}{{end}}"],
+             "--format", "{{range .NetworkSettings.Networks}}{{.Name}}{{end}}"],
             capture_output=True,
             text=True,
             timeout=10,
@@ -171,7 +170,7 @@ class LocalstackDockerEnvironment:
 
             time.sleep(1)
 
-        self.logger.warning(f"DNS verification failed after {max_retries} attempts, proceeding anyway")
+        raise RuntimeError(f"DNS verification failed after {max_retries} attempts - LocalStack container not resolvable on network {self.network_name}")
 
     def _wait_for_localstack(self) -> None:
         """Wait for localstack to be ready."""
@@ -212,8 +211,12 @@ class LocalstackDockerEnvironment:
         self,
         command: str,
         env_vars: Optional[Dict[str, str]] = None,
+        work_dir: Optional[Path] = None,
     ) -> Dict[str, Any]:
         """Execute a terraform command in a Docker container."""
+        # Use provided work_dir or fall back to instance work_dir
+        effective_work_dir = work_dir if work_dir is not None else self.work_dir
+
         default_env = {
             "AWS_ACCESS_KEY_ID": "test",
             "AWS_SECRET_ACCESS_KEY": "test",
@@ -228,7 +231,7 @@ class LocalstackDockerEnvironment:
         cmd = [
             "docker", "run", "--rm",
             "--network", self.network_name,
-            "--mount", f"type=bind,source={str(self.work_dir.absolute())},target=/workspace",
+            "--mount", f"type=bind,source={str(effective_work_dir.absolute())},target=/workspace",
             "-w", "/workspace",
         ]
 
@@ -285,9 +288,11 @@ class LocalstackDockerEnvironment:
         self,
         script_path: str,
         region: str = "us-east-1",
+        work_dir: Optional[Path] = None,
     ) -> Dict[str, Any]:
         """Execute a validation script in a Python container."""
         script_path = Path(script_path)
+        effective_work_dir = work_dir if work_dir is not None else self.work_dir
 
         if not script_path.exists():
             return {
@@ -306,7 +311,7 @@ class LocalstackDockerEnvironment:
             "docker", "run", "--rm",
             "--network", self.network_name,
             "--mount", f"type=bind,source={str(script_path.parent.absolute())},target=/validation,readonly",
-            "--mount", f"type=bind,source={str(self.work_dir.absolute())},target=/workspace",
+            "--mount", f"type=bind,source={str(effective_work_dir.absolute())},target=/workspace",
             "-w", "/workspace",
         ]
 
@@ -347,9 +352,11 @@ class LocalstackDockerEnvironment:
         self,
         setup_script: str,
         region: str = "us-east-1",
+        work_dir: Optional[Path] = None,
     ) -> Dict[str, Any]:
         """Execute a setup script for pre-existing infrastructure in a Docker container."""
         setup_script_path = Path(setup_script)
+        effective_work_dir = work_dir if work_dir is not None else self.work_dir
 
         if not setup_script_path.exists():
             return {
@@ -358,14 +365,13 @@ class LocalstackDockerEnvironment:
             }
 
         # Copy setup script to working directory
-        work_dir = self.work_dir
-        setup_script_copy = work_dir / "setup.sh"
+        setup_script_copy = effective_work_dir / "setup.sh"
         shutil.copy(setup_script_path, setup_script_copy)
 
         # Copy lambda_code directory if it exists
         lambda_code_dir = setup_script_path.parent / "lambda_code"
         if lambda_code_dir.exists():
-            dest_lambda_code_dir = work_dir / "lambda_code"
+            dest_lambda_code_dir = effective_work_dir / "lambda_code"
             if dest_lambda_code_dir.exists():
                 shutil.rmtree(dest_lambda_code_dir)
             shutil.copytree(lambda_code_dir, dest_lambda_code_dir)
@@ -380,7 +386,7 @@ class LocalstackDockerEnvironment:
         cmd = [
             "docker", "run", "--rm",
             "--network", self.network_name,
-            "--mount", f"type=bind,source={str(work_dir.absolute())},target=/workspace",
+            "--mount", f"type=bind,source={str(effective_work_dir.absolute())},target=/workspace",
             "-w", "/workspace",
         ]
 
@@ -422,15 +428,16 @@ class LocalstackDockerEnvironment:
         self,
         cleanup_script: str,
         region: str = "us-east-1",
+        work_dir: Optional[Path] = None,
     ) -> Dict[str, Any]:
         """Execute a cleanup script in a Docker container."""
         cleanup_script_path = Path(cleanup_script)
+        effective_work_dir = work_dir if work_dir is not None else self.work_dir
 
         if not cleanup_script_path.exists():
             return {"success": False, "error": "Cleanup script not found"}
 
-        work_dir = self.work_dir
-        cleanup_script_copy = work_dir / "cleanup.sh"
+        cleanup_script_copy = effective_work_dir / "cleanup.sh"
         shutil.copy(cleanup_script_path, cleanup_script_copy)
 
         default_env = {
@@ -443,7 +450,7 @@ class LocalstackDockerEnvironment:
         cmd = [
             "docker", "run", "--rm",
             "--network", self.network_name,
-            "--mount", f"type=bind,source={str(work_dir.absolute())},target=/workspace",
+            "--mount", f"type=bind,source={str(effective_work_dir.absolute())},target=/workspace",
             "-w", "/workspace",
         ]
 

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class EvalConfig:
     """Configuration for the evaluation pipeline."""
-    run_apply: bool = False
+    run_apply: bool = True
     run_destroy: bool = True
     run_validation: bool = False
     init_timeout: int = 120
@@ -32,6 +32,7 @@ def evaluate_instance(
     generated_files: dict[str, str],
     config: EvalConfig,
     work_dir: Optional[str] = None,
+    docker_env = None,
 ) -> InstanceResult:
     """
     Run the full evaluation pipeline for a single instance.
@@ -44,6 +45,8 @@ def evaluate_instance(
         config: Evaluation configuration
         work_dir: Optional directory for terraform files. If provided, files persist
                   after evaluation (used for output storage). If None, uses a temp dir.
+        docker_env: Optional pre-created docker environment. If provided, will be reused
+                    and NOT cleaned up. If None and config.use_docker=True, creates new one.
 
     Returns:
         InstanceResult with all stage results and total score
@@ -53,9 +56,9 @@ def evaluate_instance(
         generated_files=generated_files,
     )
 
-    # Create Docker environment if requested
-    docker_env = None
-    if config.use_docker:
+    # Create Docker environment if requested and not provided
+    docker_env_created = False
+    if config.use_docker and docker_env is None:
         _log("  Starting Docker + LocalStack environment...")
         from terraform_llm.agent.docker_environment import LocalstackDockerEnvironment
         docker_env = LocalstackDockerEnvironment(
@@ -63,6 +66,7 @@ def evaluate_instance(
             image=config.terraform_image,
             localstack_image=config.localstack_image,
         )
+        docker_env_created = True
         _log("  Docker environment ready")
 
     try:
@@ -149,8 +153,8 @@ def evaluate_instance(
             _run_cleanup_if_needed(env, instance)
 
     finally:
-        # Clean up Docker resources
-        if docker_env is not None:
+        # Clean up Docker resources only if we created it
+        if docker_env is not None and docker_env_created:
             _log("  Cleaning up Docker resources...")
             docker_env.cleanup()
 
