@@ -77,8 +77,8 @@ uv run python -m terraform_llm.cli benchmark dataset/ -o output --instance-id te
 # Filter by difficulty, provider, or tags
 uv run python -m terraform_llm.cli benchmark dataset/ -o output --difficulty easy --provider aws --tag s3 --limit 5
 
-# Full apply mode (deploys real infrastructure via LocalStack, then validates and destroys)
-uv run python -m terraform_llm.cli benchmark dataset/ -o output --run-apply
+# Plan-only mode (skips apply and validation, faster but less thorough)
+uv run python -m terraform_llm.cli benchmark dataset/ -o output --no-run-apply
 
 # Skip code generation — reuse .tf files already in the output directory
 uv run python -m terraform_llm.cli benchmark dataset/ -o output --skip-generation
@@ -99,7 +99,7 @@ uv run python -m terraform_llm.cli benchmark dataset/ -o output \
 | `--docker` / `--no-docker` | `--docker` | Use Docker + LocalStack for isolated execution |
 | `--terraform-image` | `hashicorp/terraform:latest` | Docker image for Terraform |
 | `--localstack-image` | `localstack/localstack:latest` | Docker image for LocalStack |
-| `--run-apply` | off | Run terraform apply (creates infrastructure) |
+| `--run-apply` / `--no-run-apply` | `--run-apply` | Run terraform apply (creates infrastructure) |
 | `--skip-generation` | off | Reuse existing .tf files from output directory |
 | `-i`, `--instance-id` | none | Run a specific instance by ID |
 | `--difficulty` | none | Filter by difficulty (easy, medium, hard) |
@@ -148,7 +148,7 @@ dataset = load_dataset("data/benchmark.jsonl")
 
 # Evaluate any model — litellm supports OpenAI, Anthropic, Ollama, HuggingFace, etc.
 model = ModelConfig(model="anthropic/claude-sonnet-4-5-20250929")
-config = EvalConfig(run_apply=False)  # plan-only mode (no real infra created)
+config = EvalConfig(run_apply=True)  # full apply mode (deploys to LocalStack)
 
 report = run_benchmark(dataset, model, config)
 print(f"Mean score: {report.mean_score:.2f}")
@@ -207,8 +207,8 @@ Each instance in the JSONL dataset looks like:
 
 | Mode | Flag | What happens |
 |---|---|---|
-| **Plan only** (default) | `run_apply=False` | Runs init/validate/plan. No real infrastructure. Free. |
-| **Full apply** | `run_apply=True` | Deploys real infrastructure, runs validation, destroys after. |
+| **Full apply** (default) | `run_apply=True` | Deploys real infrastructure, runs validation, destroys after. |
+| **Plan only** | `run_apply=False` | Runs init/validate/plan. No real infrastructure. Free. |
 | **Docker** (default) | `--docker` | Runs Terraform in Docker with LocalStack. Isolated, no real AWS costs. |
 | **Local** | `--no-docker` | Runs Terraform directly on the host. Requires Terraform CLI installed. |
 

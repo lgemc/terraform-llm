@@ -62,10 +62,6 @@ class TerraformEnvironment:
             self._temp_dir = tempfile.TemporaryDirectory(prefix="terraform-bench-")
             self.work_dir = Path(self._temp_dir.name)
 
-        # If using docker, update its work_dir to match ours
-        if self._docker_env is not None:
-            self._docker_env.work_dir = self.work_dir
-
     @property
     def use_docker(self) -> bool:
         return self._docker_env is not None
@@ -119,7 +115,7 @@ class TerraformEnvironment:
         original_timeout = self._docker_env.timeout
         self._docker_env.timeout = timeout
         try:
-            result = self._docker_env.execute_terraform_command(command)
+            result = self._docker_env.execute_terraform_command(command, work_dir=self.work_dir)
             duration = time.monotonic() - start
             return CommandResult(
                 returncode=result["returncode"],
@@ -152,13 +148,17 @@ class TerraformEnvironment:
                 duration_seconds=result.duration_seconds,
                 raw_output=result.stdout,
             )
+        # Capture both stdout and stderr for failures
+        error_output = result.stdout if result.stdout else result.stderr
+        if result.stdout and result.stderr:
+            error_output = result.stdout + "\n" + result.stderr
         return StageResult(
             stage="init",
             status=StageStatus.FAILED,
             score=0.0,
             message="terraform init failed",
             duration_seconds=result.duration_seconds,
-            raw_output=result.stderr,
+            raw_output=error_output,
         )
 
     def terraform_validate(self, timeout: int = 60) -> StageResult:
@@ -213,13 +213,17 @@ class TerraformEnvironment:
             timeout=timeout,
         )
         if plan_result.returncode != 0:
+            # Capture both stdout and stderr for failures
+            error_output = plan_result.stdout if plan_result.stdout else plan_result.stderr
+            if plan_result.stdout and plan_result.stderr:
+                error_output = plan_result.stdout + "\n" + plan_result.stderr
             return StageResult(
                 stage="plan",
                 status=StageStatus.FAILED,
                 score=0.0,
                 message="terraform plan failed",
                 duration_seconds=time.monotonic() - start,
-                raw_output=plan_result.stderr,
+                raw_output=error_output,
             )
 
         show_result = self._exec(
@@ -287,13 +291,17 @@ class TerraformEnvironment:
                 duration_seconds=result.duration_seconds,
                 raw_output=result.stdout,
             )
+        # Capture both stdout and stderr for failures (terraform writes errors to both)
+        error_output = result.stdout if result.stdout else result.stderr
+        if result.stdout and result.stderr:
+            error_output = result.stdout + "\n" + result.stderr
         return StageResult(
             stage="apply",
             status=StageStatus.FAILED,
             score=0.0,
             message="terraform apply failed",
             duration_seconds=result.duration_seconds,
-            raw_output=result.stderr,
+            raw_output=error_output,
         )
 
     def terraform_destroy(self, timeout: int = 600) -> StageResult:
@@ -312,13 +320,17 @@ class TerraformEnvironment:
                 duration_seconds=result.duration_seconds,
                 raw_output=result.stdout,
             )
+        # Capture both stdout and stderr for failures
+        error_output = result.stdout if result.stdout else result.stderr
+        if result.stdout and result.stderr:
+            error_output = result.stdout + "\n" + result.stderr
         return StageResult(
             stage="destroy",
             status=StageStatus.FAILED,
             score=0.0,
             message="terraform destroy failed",
             duration_seconds=result.duration_seconds,
-            raw_output=result.stderr,
+            raw_output=error_output,
         )
 
     def run_validation_script(self, script_path: str, timeout: int = 120) -> StageResult:
@@ -368,7 +380,7 @@ class TerraformEnvironment:
         original_timeout = self._docker_env.timeout
         self._docker_env.timeout = timeout
         try:
-            result = self._docker_env.execute_validation_script(script_path)
+            result = self._docker_env.execute_validation_script(script_path, work_dir=self.work_dir)
             duration = time.monotonic() - start
 
             if result.get("passed", False):
@@ -400,7 +412,7 @@ class TerraformEnvironment:
             return self._run_local_setup_script(script_path, region)
 
         start = time.monotonic()
-        result = self._docker_env.execute_setup_script(script_path, region)
+        result = self._docker_env.execute_setup_script(script_path, region, work_dir=self.work_dir)
         duration = time.monotonic() - start
 
         if result.get("success", False):
@@ -484,7 +496,7 @@ class TerraformEnvironment:
             return self._run_local_cleanup_script(script_path, region)
 
         start = time.monotonic()
-        result = self._docker_env.execute_cleanup_script(script_path, region)
+        result = self._docker_env.execute_cleanup_script(script_path, region, work_dir=self.work_dir)
         duration = time.monotonic() - start
 
         if result.get("success", False):

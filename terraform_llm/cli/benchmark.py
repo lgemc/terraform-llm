@@ -4,14 +4,131 @@ import json
 import time
 from typing import Optional, List
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 import typer
 from rich import print as rprint
 from rich.console import Console
 
 from terraform_llm.agent import ModelConfig, EvalConfig, run_instance, generate_hcl
+from terraform_llm.agent.evaluator import evaluate_instance
+from terraform_llm.agent.results import BenchmarkReport
 from terraform_llm.datasets import load_dataset, DatasetLoader
+from terraform_llm.tracing.atif_tracer import ATIFTracer
 
 console = Console()
+console_lock = threading.Lock()
+
+
+def process_instance(
+    inst,
+    idx: int,
+    total: int,
+    model_config: ModelConfig,
+    eval_config: EvalConfig,
+    output_base: Path,
+    skip_generation: bool,
+    verbose: bool,
+    docker_env=None,
+):
+    """Process a single benchmark instance (used for parallel execution)."""
+    instance_dir = output_base / inst.instance_id
+    instance_dir.mkdir(parents=True, exist_ok=True)
+    instance_start = time.time()
+
+    with console_lock:
+        console.print(f"\n[{idx}/{total}] Processing: {inst.instance_id}")
+
+    try:
+        if skip_generation:
+            # Load existing code from instance directory
+            if not instance_dir.exists():
+                with console_lock:
+                    console.print(f"  [red]Error: No existing code found in {instance_dir}[/red]")
+                return None
+
+            terraform_code = {}
+            for tf_file in instance_dir.glob("*.tf"):
+                terraform_code[tf_file.name] = tf_file.read_text()
+
+            if not terraform_code:
+                with console_lock:
+                    console.print(f"  [red]Error: No .tf files found in {instance_dir}[/red]")
+                return None
+
+            with console_lock:
+                console.print(f"  Loaded {len(terraform_code)} file(s) from {instance_dir}")
+
+            # Evaluate with persistent work_dir
+            instance_result = evaluate_instance(
+                inst, terraform_code, eval_config, work_dir=str(instance_dir), docker_env=docker_env,
+            )
+            instance_result.model = model_config.model
+            instance_result.compute_total_score()
+        else:
+            # Full pipeline: generate + evaluate, using instance_dir as work_dir
+            instance_result = run_instance(
+                inst, model_config, eval_config, work_dir=str(instance_dir), docker_env=docker_env,
+            )
+
+        # Save ATIF trajectory
+        tracer = ATIFTracer(agent_version="1.0.0")
+        atif_traj = tracer.from_terraform_trajectory(
+            instance_id=inst.instance_id,
+            problem_statement=inst.problem_statement,
+            model=instance_result.model,
+            agent_type=model_config.agent_type,
+            generated_files=instance_result.generated_files,
+            stages=[s.to_dict() for s in instance_result.stages],
+            tool_calls=instance_result.tool_calls,
+            prompt=instance_result.prompt,
+        )
+
+        # Add extra metadata to trajectory
+        atif_traj.extra = atif_traj.extra or {}
+        atif_traj.extra.update({
+            "region": inst.region,
+            "expected_resources": inst.expected_resources,
+            "total_score": instance_result.total_score,
+            "total_time_seconds": time.time() - instance_start,
+            "model_config": model_config.to_dict(),
+        })
+        if instance_result.error:
+            atif_traj.extra["error"] = instance_result.error
+
+        # Save ATIF trajectory
+        traj_path = instance_dir / f"{inst.instance_id}.traj.json"
+        with open(traj_path, "w") as f:
+            json.dump(atif_traj.to_json_dict(exclude_none=True), f, indent=2)
+
+        # Print per-instance result (thread-safe)
+        with console_lock:
+            score_str = f"{instance_result.total_score:.2f}"
+            if instance_result.total_score >= 0.8:
+                console.print(f"  [green]Score: {score_str}[/green]")
+            else:
+                console.print(f"  [yellow]Score: {score_str}[/yellow]")
+
+            for stage in instance_result.stages:
+                status_color = "green" if stage.status.value == "passed" else "red"
+                if stage.status.value == "skipped":
+                    status_color = "dim"
+                console.print(f"    {stage.stage}: [{status_color}]{stage.status.value}[/{status_color}] ({stage.score:.2f})")
+
+            if instance_result.error:
+                console.print(f"  [red]Error: {instance_result.error}[/red]")
+
+            console.print(f"  Trace: {traj_path}")
+
+        return instance_result
+
+    except Exception as e:
+        with console_lock:
+            console.print(f"  [red]Error: {e}[/red]")
+            if verbose:
+                import traceback
+                traceback.print_exc()
+        return None
 
 
 def benchmark_command(
@@ -55,7 +172,7 @@ def benchmark_command(
     tags: Optional[List[str]] = typer.Option(
         None, "--tag", help="Filter by tags (can be specified multiple times)",
     ),
-    run_apply: bool = typer.Option(False, help="Run terraform apply (creates infrastructure)"),
+    run_apply: bool = typer.Option(True, help="Run terraform apply (creates infrastructure)"),
     use_docker: bool = typer.Option(
         True,
         "--docker/--no-docker",
@@ -77,6 +194,12 @@ def benchmark_command(
         help="Skip code generation and reuse existing Terraform files from output directory",
     ),
     verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose output"),
+    parallel: int = typer.Option(
+        3,
+        "--parallel",
+        "-j",
+        help="Number of parallel workers for benchmark execution (default: 3)",
+    ),
 ):
     """Run benchmark evaluation with optional Docker + LocalStack execution."""
     rprint(f"[bold]Running benchmark on dataset:[/bold] {dataset}")
@@ -85,6 +208,9 @@ def benchmark_command(
         rprint("[bold]Execution mode:[/bold] Docker + LocalStack")
     else:
         rprint("[bold]Execution mode:[/bold] Local Terraform")
+
+    if parallel > 1:
+        rprint(f"[bold]Parallelism:[/bold] {parallel} workers")
 
     # Load dataset
     try:
@@ -140,99 +266,73 @@ def benchmark_command(
     )
 
     # Process instances
-    from terraform_llm.agent.results import BenchmarkReport
-    from terraform_llm.agent.evaluator import evaluate_instance
     report = BenchmarkReport(model=model_config.model)
     output_base = Path(output_dir)
 
-    for idx, inst in enumerate(instances, 1):
-        console.print(f"\n[{idx}/{len(instances)}] Processing: {inst.instance_id}")
-        instance_dir = output_base / inst.instance_id
-        instance_dir.mkdir(parents=True, exist_ok=True)
-        instance_start = time.time()
+    # Create shared docker environment for parallel execution
+    shared_docker_env = None
+    if use_docker and parallel > 1:
+        console.print("[bold]Creating shared Docker + LocalStack environment for parallel execution...[/bold]")
+        from terraform_llm.agent.docker_environment import LocalstackDockerEnvironment
+        # Use a dummy work_dir - each instance will use its own instance_dir
+        shared_docker_env = LocalstackDockerEnvironment(
+            work_dir=str(output_base),
+            image=terraform_image,
+            localstack_image=localstack_image,
+        )
+        console.print("[green]Shared environment ready[/green]")
 
-        try:
-            if skip_generation:
-                # Load existing code from instance directory
-                if not instance_dir.exists():
-                    console.print(f"  [red]Error: No existing code found in {instance_dir}[/red]")
-                    continue
+    # Choose parallel or sequential execution
+    try:
+        if parallel > 1:
+            rprint(f"[bold]Using {parallel} parallel workers[/bold]")
 
-                terraform_code = {}
-                for tf_file in instance_dir.glob("*.tf"):
-                    terraform_code[tf_file.name] = tf_file.read_text()
+            # Process instances in parallel using ThreadPoolExecutor
+            with ThreadPoolExecutor(max_workers=parallel) as executor:
+                # Submit all instances for processing
+                futures = {}
+                for idx, inst in enumerate(instances, 1):
+                    future = executor.submit(
+                        process_instance,
+                        inst,
+                        idx,
+                        len(instances),
+                        model_config,
+                        eval_config,
+                        output_base,
+                        skip_generation,
+                        verbose,
+                        shared_docker_env,
+                    )
+                    futures[future] = inst
 
-                if not terraform_code:
-                    console.print(f"  [red]Error: No .tf files found in {instance_dir}[/red]")
-                    continue
-
-                console.print(f"  Loaded {len(terraform_code)} file(s) from {instance_dir}")
-
-                # Evaluate with persistent work_dir
-                instance_result = evaluate_instance(
-                    inst, terraform_code, eval_config, work_dir=str(instance_dir),
+                # Collect results as they complete
+                for future in as_completed(futures):
+                    instance_result = future.result()
+                    if instance_result:
+                        report.results.append(instance_result)
+        else:
+            # Sequential execution (original behavior)
+            for idx, inst in enumerate(instances, 1):
+                instance_result = process_instance(
+                    inst,
+                    idx,
+                    len(instances),
+                    model_config,
+                    eval_config,
+                    output_base,
+                    skip_generation,
+                    verbose,
+                    shared_docker_env,
                 )
-                instance_result.model = model_config.model
-                instance_result.compute_total_score()
-            else:
-                # Full pipeline: generate + evaluate, using instance_dir as work_dir
-                instance_result = run_instance(
-                    inst, model_config, eval_config, work_dir=str(instance_dir),
-                )
-
-            report.results.append(instance_result)
-
-            # Save trajectory file
-            traj = {
-                "trajectory_format": "terraform-agent-1.0",
-                "instance_id": inst.instance_id,
-                "info": {
-                    "problem_statement": inst.problem_statement,
-                    "region": inst.region,
-                    "expected_resources": inst.expected_resources,
-                    "model": instance_result.model,
-                    "agent_type": model_config.agent_type,
-                    "total_score": instance_result.total_score,
-                    "total_time_seconds": time.time() - instance_start,
-                },
-                "model_config": model_config.to_dict(),
-                "generated_files": instance_result.generated_files,
-                "stages": [s.to_dict() for s in instance_result.stages],
-            }
-            if instance_result.prompt:
-                traj["prompt"] = instance_result.prompt
-            if instance_result.tool_calls:
-                traj["tool_calls"] = instance_result.tool_calls
-            if instance_result.error:
-                traj["info"]["error"] = instance_result.error
-
-            traj_path = instance_dir / f"{inst.instance_id}.traj.json"
-            with open(traj_path, "w") as f:
-                json.dump(traj, f, indent=2)
-
-            # Print per-instance result
-            score_str = f"{instance_result.total_score:.2f}"
-            if instance_result.total_score >= 0.8:
-                console.print(f"  [green]Score: {score_str}[/green]")
-            else:
-                console.print(f"  [yellow]Score: {score_str}[/yellow]")
-
-            for stage in instance_result.stages:
-                status_color = "green" if stage.status.value == "passed" else "red"
-                if stage.status.value == "skipped":
-                    status_color = "dim"
-                console.print(f"    {stage.stage}: [{status_color}]{stage.status.value}[/{status_color}] ({stage.score:.2f})")
-
-            if instance_result.error:
-                console.print(f"  [red]Error: {instance_result.error}[/red]")
-
-            console.print(f"  Trace: {traj_path}")
-
-        except Exception as e:
-            console.print(f"  [red]Error: {e}[/red]")
-            if verbose:
-                import traceback
-                traceback.print_exc()
+                if instance_result:
+                    report.results.append(instance_result)
+    finally:
+        # Clean up shared docker environment
+        if shared_docker_env is not None:
+            console.print("\n[bold]Cleaning up shared Docker environment...[/bold]")
+            shared_docker_env.cleanup()
+            console.print("[green]Cleanup complete[/green]")
 
     # Print summary
     console.print("\n" + "=" * 60)
