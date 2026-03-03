@@ -1,4 +1,17 @@
 import type { InstanceResult } from '../types'
+import {
+  Sidebar,
+  SidebarContent,
+  SidebarGroup,
+  SidebarGroupLabel,
+  SidebarGroupContent,
+  SidebarHeader,
+  SidebarMenu,
+  SidebarMenuItem,
+  SidebarMenuButton,
+  SidebarMenuBadge,
+} from '@/components/ui/sidebar'
+import { cn } from '@/lib/utils'
 
 interface Props {
   instances: InstanceResult[]
@@ -6,41 +19,55 @@ interface Props {
   onSelect: (id: string) => void
 }
 
-function scoreBadge(score: number) {
-  const pct = (score * 100).toFixed(0)
-  if (score >= 0.8) return <span className="bg-green-900 text-green-300 text-xs px-2 py-0.5 rounded-full font-medium">{pct}%</span>
-  if (score >= 0.5) return <span className="bg-yellow-900 text-yellow-300 text-xs px-2 py-0.5 rounded-full font-medium">{pct}%</span>
-  return <span className="bg-red-900 text-red-300 text-xs px-2 py-0.5 rounded-full font-medium">{pct}%</span>
+function scoreBadgeClass(score: number) {
+  if (score >= 0.8) return 'bg-green-900/80 text-green-300'
+  if (score >= 0.5) return 'bg-yellow-900/80 text-yellow-300'
+  return 'bg-red-900/80 text-red-300'
 }
 
-export function Sidebar({ instances, selectedId, onSelect }: Props) {
+export function AppSidebar({ instances, selectedId, onSelect }: Props) {
   const sorted = [...instances].sort((a, b) => b.total_score - a.total_score)
 
   return (
-    <aside className="w-72 bg-gray-900 border-r border-gray-800 overflow-y-auto shrink-0">
-      <div className="p-3 border-b border-gray-800">
-        <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wide">Instances ({instances.length})</h2>
-      </div>
-      <ul>
-        {sorted.map(inst => (
-          <li key={inst.instance_id}>
-            <button
-              onClick={() => onSelect(inst.instance_id)}
-              className={`w-full text-left px-4 py-3 border-b border-gray-800/50 transition-colors hover:bg-gray-800 ${
-                selectedId === inst.instance_id ? 'bg-gray-800 border-l-2 border-l-blue-500' : ''
-              }`}
-            >
-              <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-medium truncate">{inst.instance_id}</span>
-                {scoreBadge(inst.total_score)}
-              </div>
-              <div className="text-xs text-gray-500 mt-1">
-                {inst.stages.filter(s => s.status === 'passed').length}/{inst.stages.length} stages passed
-              </div>
-            </button>
-          </li>
-        ))}
-      </ul>
-    </aside>
+    <Sidebar collapsible="none" className="border-r">
+      <SidebarHeader className="px-4 py-3">
+        <h2 className="text-xs font-semibold text-sidebar-foreground/70 uppercase tracking-wider">
+          Instances ({instances.length})
+        </h2>
+      </SidebarHeader>
+      <SidebarContent>
+        <SidebarGroup className="p-0">
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {sorted.map(inst => (
+                <SidebarMenuItem key={inst.instance_id}>
+                  <SidebarMenuButton
+                    isActive={selectedId === inst.instance_id}
+                    onClick={() => onSelect(inst.instance_id)}
+                    className="h-auto py-2.5 px-3 flex-col items-start gap-0.5"
+                    tooltip={inst.instance_id}
+                  >
+                    <span className="text-sm font-medium truncate w-full">
+                      {inst.instance_id}
+                    </span>
+                    <span className="text-xs text-sidebar-foreground/50">
+                      {inst.stages.filter(s => s.status === 'passed').length}/{inst.stages.length} stages passed
+                    </span>
+                  </SidebarMenuButton>
+                  <SidebarMenuBadge
+                    className={cn(
+                      'rounded-md px-1.5 py-0.5 text-[10px] font-semibold',
+                      scoreBadgeClass(inst.total_score)
+                    )}
+                  >
+                    {(inst.total_score * 100).toFixed(0)}%
+                  </SidebarMenuBadge>
+                </SidebarMenuItem>
+              ))}
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
+      </SidebarContent>
+    </Sidebar>
   )
 }

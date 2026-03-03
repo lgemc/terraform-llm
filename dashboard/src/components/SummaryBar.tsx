@@ -1,34 +1,50 @@
 import type { BenchmarkResults } from '../types'
+import { Badge } from '@/components/ui/badge'
+import { Separator } from '@/components/ui/separator'
 
 interface Props {
   results: BenchmarkResults
 }
 
-export function SummaryBar({ results }: Props) {
-  const scoreColor = results.mean_score >= 0.8 ? 'text-green-400' : results.mean_score >= 0.5 ? 'text-yellow-400' : 'text-red-400'
+function scoreColor(score: number) {
+  if (score >= 0.8) return 'bg-green-600 text-white hover:bg-green-600'
+  if (score >= 0.5) return 'bg-yellow-600 text-white hover:bg-yellow-600'
+  return 'bg-red-600 text-white hover:bg-red-600'
+}
 
+function rateColor(rate: number) {
+  if (rate >= 0.8) return 'border-green-700 text-green-400'
+  if (rate >= 0.5) return 'border-yellow-700 text-yellow-400'
+  return 'border-red-700 text-red-400'
+}
+
+export function SummaryBar({ results }: Props) {
   return (
-    <header className="bg-gray-900 border-b border-gray-800 px-6 py-3 flex items-center gap-8 shrink-0">
+    <header className="border-b bg-card px-6 py-3 flex items-center gap-6 shrink-0">
       <h1 className="font-bold text-lg">Terraform LLM Benchmark</h1>
-      <div className="flex items-center gap-6 text-sm">
-        <div>
-          <span className="text-gray-400">Model: </span>
+      <Separator orientation="vertical" className="h-6" />
+      <div className="flex items-center gap-4 text-sm flex-wrap">
+        <div className="flex items-center gap-1.5">
+          <span className="text-muted-foreground">Model:</span>
           <span className="font-medium">{results.model}</span>
         </div>
-        <div>
-          <span className="text-gray-400">Mean Score: </span>
-          <span className={`font-bold ${scoreColor}`}>{(results.mean_score * 100).toFixed(1)}%</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-muted-foreground">Mean Score:</span>
+          <Badge className={scoreColor(results.mean_score)}>
+            {(results.mean_score * 100).toFixed(1)}%
+          </Badge>
         </div>
-        <div>
-          <span className="text-gray-400">Instances: </span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-muted-foreground">Instances:</span>
           <span className="font-medium">{results.num_instances}</span>
         </div>
+        <Separator orientation="vertical" className="h-4" />
         {Object.entries(results.stage_pass_rates).map(([stage, rate]) => (
-          <div key={stage}>
-            <span className="text-gray-400">{stage}: </span>
-            <span className={`font-medium ${rate >= 0.8 ? 'text-green-400' : rate >= 0.5 ? 'text-yellow-400' : 'text-red-400'}`}>
+          <div key={stage} className="flex items-center gap-1.5">
+            <span className="text-muted-foreground">{stage}:</span>
+            <Badge variant="outline" className={rateColor(rate)}>
               {(rate * 100).toFixed(0)}%
-            </span>
+            </Badge>
           </div>
         ))}
       </div>

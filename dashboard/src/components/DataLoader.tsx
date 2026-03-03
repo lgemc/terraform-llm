@@ -1,5 +1,9 @@
 import { useCallback, useState } from 'react'
 import type { BenchmarkResults, TrajectoryFile } from '../types'
+import { isATIFTrajectory, atifToTrajectory } from '../types'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
+import { FolderOpen, FileJson, Files } from 'lucide-react'
 
 interface Props {
   onDataLoaded: (data: BenchmarkResults | TrajectoryFile[]) => void
@@ -28,7 +32,8 @@ export function DataLoader({ onDataLoaded }: Props) {
         const trajMap = new Map<string, TrajectoryFile>()
         for (const file of trajFiles) {
           const text = await file.text()
-          const traj = JSON.parse(text) as TrajectoryFile
+          const parsed = JSON.parse(text)
+          const traj = isATIFTrajectory(parsed) ? atifToTrajectory(parsed) : parsed as TrajectoryFile
           trajMap.set(traj.instance_id, traj)
         }
 
@@ -99,7 +104,8 @@ export function DataLoader({ onDataLoaded }: Props) {
         const trajectories: TrajectoryFile[] = []
         for (const file of trajFiles) {
           const text = await file.text()
-          trajectories.push(JSON.parse(text) as TrajectoryFile)
+          const parsed = JSON.parse(text)
+          trajectories.push(isATIFTrajectory(parsed) ? atifToTrajectory(parsed) : parsed as TrajectoryFile)
         }
         onDataLoaded(trajectories)
         return
@@ -128,39 +134,52 @@ export function DataLoader({ onDataLoaded }: Props) {
 
   return (
     <div className="h-screen flex items-center justify-center p-8">
-      <div
-        className={`max-w-lg w-full border-2 border-dashed rounded-xl p-12 text-center transition-colors ${
-          isDragging ? 'border-blue-400 bg-blue-950/30' : 'border-gray-700 bg-gray-900'
+      <Card
+        className={`max-w-lg w-full border-2 border-dashed p-8 text-center transition-colors ${
+          isDragging ? 'border-primary bg-primary/5' : ''
         }`}
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true) }}
         onDragLeave={() => setIsDragging(false)}
         onDrop={handleDrop}
       >
-        <div className="text-4xl mb-4">📂</div>
-        <h1 className="text-xl font-semibold mb-2">Load Benchmark Results</h1>
-        <p className="text-gray-400 mb-6 text-sm">
-          Select the <code className="text-blue-400">output/</code> folder to load all results,
-          or pick individual files.
-        </p>
-        <div className="flex flex-col gap-3 items-center">
-          <label className="cursor-pointer bg-blue-600 hover:bg-blue-500 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors">
-            Select Output Folder
-            {/* @ts-expect-error webkitdirectory is non-standard */}
-            <input type="file" webkitdirectory="" className="hidden" onChange={handleFileInput} />
-          </label>
-          <label className="cursor-pointer bg-gray-700 hover:bg-gray-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors">
-            Select benchmark_results.json
-            <input type="file" accept=".json" className="hidden" onChange={handleFileInput} />
-          </label>
-          <label className="cursor-pointer bg-gray-700 hover:bg-gray-600 text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors">
-            Select .traj.json files
-            <input type="file" accept=".json" multiple className="hidden" onChange={handleFileInput} />
-          </label>
-        </div>
-        {error && (
-          <p className="mt-4 text-red-400 text-sm">{error}</p>
-        )}
-      </div>
+        <CardHeader className="pb-4">
+          <div className="text-4xl mb-2">📂</div>
+          <CardTitle className="text-xl">Load Benchmark Results</CardTitle>
+          <CardDescription>
+            Select the <code className="text-primary">output/</code> folder to load all results,
+            or pick individual files.
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="flex flex-col gap-3 items-center">
+            <Button asChild className="w-64">
+              <label className="cursor-pointer">
+                <FolderOpen className="h-4 w-4" />
+                Select Output Folder
+                {/* @ts-expect-error webkitdirectory is non-standard */}
+                <input type="file" webkitdirectory="" className="hidden" onChange={handleFileInput} />
+              </label>
+            </Button>
+            <Button asChild variant="secondary" className="w-64">
+              <label className="cursor-pointer">
+                <FileJson className="h-4 w-4" />
+                Select benchmark_results.json
+                <input type="file" accept=".json" className="hidden" onChange={handleFileInput} />
+              </label>
+            </Button>
+            <Button asChild variant="secondary" className="w-64">
+              <label className="cursor-pointer">
+                <Files className="h-4 w-4" />
+                Select .traj.json files
+                <input type="file" accept=".json" multiple className="hidden" onChange={handleFileInput} />
+              </label>
+            </Button>
+          </div>
+          {error && (
+            <p className="mt-4 text-destructive text-sm">{error}</p>
+          )}
+        </CardContent>
+      </Card>
     </div>
   )
 }

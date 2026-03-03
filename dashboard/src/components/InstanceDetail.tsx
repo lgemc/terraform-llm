@@ -1,74 +1,117 @@
 import type { InstanceResult } from '../types'
 import { StageTimeline } from './StageTimeline'
 import { CodeViewer } from './CodeViewer'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
+import { ScrollArea } from '@/components/ui/scroll-area'
+import { Clock, Cpu, AlertTriangle } from 'lucide-react'
 
 interface Props {
   instance: InstanceResult
+}
+
+function scoreColor(score: number) {
+  if (score >= 0.8) return 'bg-green-600 text-white hover:bg-green-600'
+  if (score >= 0.5) return 'bg-yellow-600 text-white hover:bg-yellow-600'
+  return 'bg-red-600 text-white hover:bg-red-600'
 }
 
 export function InstanceDetail({ instance }: Props) {
   const totalTime = instance.total_time_seconds
     ?? instance.stages.reduce((sum, s) => sum + s.duration_seconds, 0)
 
-  const scoreColor = instance.total_score >= 0.8 ? 'text-green-400' : instance.total_score >= 0.5 ? 'text-yellow-400' : 'text-red-400'
-
   return (
-    <div className="max-w-4xl space-y-6">
-      {/* Header */}
-      <div>
-        <h2 className="text-2xl font-bold">{instance.instance_id}</h2>
-        <div className="flex items-center gap-4 mt-2 text-sm text-gray-400">
-          <span>Score: <span className={`font-bold text-lg ${scoreColor}`}>{(instance.total_score * 100).toFixed(1)}%</span></span>
-          <span>Time: {totalTime.toFixed(1)}s</span>
-          <span>Model: {instance.model}</span>
-        </div>
-      </div>
-
-      {/* Problem Statement */}
-      {instance.problem_statement && (
-        <div className="bg-gray-900 rounded-lg p-4 border border-gray-800">
-          <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-2">Problem Statement</h3>
-          <p className="text-gray-200 text-sm leading-relaxed">{instance.problem_statement}</p>
-        </div>
-      )}
-
-      {/* Expected Resources */}
-      {instance.expected_resources && Object.keys(instance.expected_resources).length > 0 && (
-        <div className="bg-gray-900 rounded-lg p-4 border border-gray-800">
-          <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-2">Expected Resources</h3>
-          <div className="flex flex-wrap gap-2">
-            {Object.entries(instance.expected_resources).map(([resource, count]) => (
-              <span key={resource} className="bg-gray-800 text-gray-300 text-xs px-2.5 py-1 rounded font-mono">
-                {resource} x{count as number}
-              </span>
-            ))}
+    <ScrollArea className="h-full">
+      <div className="max-w-4xl space-y-6 p-6">
+        {/* Header */}
+        <div>
+          <h2 className="text-2xl font-bold">{instance.instance_id}</h2>
+          <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
+            <div className="flex items-center gap-1.5">
+              Score: <Badge className={scoreColor(instance.total_score)}>
+                {(instance.total_score * 100).toFixed(1)}%
+              </Badge>
+            </div>
+            <div className="flex items-center gap-1">
+              <Clock className="h-3.5 w-3.5" />
+              {totalTime.toFixed(1)}s
+            </div>
+            <div className="flex items-center gap-1">
+              <Cpu className="h-3.5 w-3.5" />
+              {instance.model}
+            </div>
           </div>
         </div>
-      )}
 
-      {/* Stage Timeline */}
-      <div>
-        <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Pipeline Stages</h3>
-        <StageTimeline stages={instance.stages} />
-      </div>
+        {/* Problem Statement */}
+        {instance.problem_statement && (
+          <Card>
+            <CardHeader className="pb-2 pt-4 px-4">
+              <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                Problem Statement
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
+              <p className="text-sm leading-relaxed">{instance.problem_statement}</p>
+            </CardContent>
+          </Card>
+        )}
 
-      {/* Error */}
-      {instance.error && (
-        <div className="bg-red-950 border border-red-800 rounded-lg p-4">
-          <h3 className="text-sm font-semibold text-red-400 mb-2">Error</h3>
-          <pre className="text-red-300 text-xs whitespace-pre-wrap">{instance.error}</pre>
-        </div>
-      )}
+        {/* Expected Resources */}
+        {instance.expected_resources && Object.keys(instance.expected_resources).length > 0 && (
+          <Card>
+            <CardHeader className="pb-2 pt-4 px-4">
+              <CardTitle className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                Expected Resources
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(instance.expected_resources).map(([resource, count]) => (
+                  <Badge key={resource} variant="secondary" className="font-mono">
+                    {resource} x{count as number}
+                  </Badge>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
-      {/* Generated Code */}
-      {Object.keys(instance.generated_files).length > 0 && (
+        {/* Stage Timeline */}
         <div>
-          <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wide mb-3">Generated Terraform Code</h3>
-          {Object.entries(instance.generated_files).map(([filename, content]) => (
-            <CodeViewer key={filename} filename={filename} code={content} />
-          ))}
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+            Pipeline Stages
+          </h3>
+          <StageTimeline stages={instance.stages} />
         </div>
-      )}
-    </div>
+
+        {/* Error */}
+        {instance.error && (
+          <Card className="border-red-800 bg-red-950/30">
+            <CardHeader className="pb-2 pt-4 px-4">
+              <CardTitle className="text-sm font-semibold text-red-400 flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4" />
+                Error
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="px-4 pb-4">
+              <pre className="text-red-300 text-xs whitespace-pre-wrap">{instance.error}</pre>
+            </CardContent>
+          </Card>
+        )}
+
+        {/* Generated Code */}
+        {Object.keys(instance.generated_files).length > 0 && (
+          <div>
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+              Generated Terraform Code
+            </h3>
+            {Object.entries(instance.generated_files).map(([filename, content]) => (
+              <CodeViewer key={filename} filename={filename} code={content} />
+            ))}
+          </div>
+        )}
+      </div>
+    </ScrollArea>
   )
 }
