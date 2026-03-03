@@ -1,9 +1,10 @@
 import { useState } from 'react'
 import type { InstanceResult, BenchmarkResults, TrajectoryFile } from './types'
 import { DataLoader } from './components/DataLoader'
-import { Sidebar } from './components/Sidebar'
+import { AppSidebar } from './components/Sidebar'
 import { InstanceDetail } from './components/InstanceDetail'
 import { SummaryBar } from './components/SummaryBar'
+import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar'
 
 function trajectoryToInstance(traj: TrajectoryFile): InstanceResult {
   return {
@@ -27,12 +28,10 @@ export default function App() {
     let benchmark: BenchmarkResults
 
     if (Array.isArray(data)) {
-      // Array of trajectory files
       const instances = data.map(trajectoryToInstance)
       const scores = instances.map(i => i.total_score)
       const meanScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0
 
-      // Calculate stage pass rates
       const stageNames = new Set<string>()
       instances.forEach(i => i.stages.forEach(s => stageNames.add(s.stage)))
       const stagePassRates: Record<string, number> = {}
@@ -66,22 +65,24 @@ export default function App() {
   const selectedInstance = results.results.find(r => r.instance_id === selectedId) || null
 
   return (
-    <div className="h-screen flex flex-col">
-      <SummaryBar results={results} />
-      <div className="flex flex-1 overflow-hidden">
-        <Sidebar
-          instances={results.results}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-        />
-        <main className="flex-1 overflow-y-auto p-6">
-          {selectedInstance ? (
-            <InstanceDetail instance={selectedInstance} />
-          ) : (
-            <div className="text-gray-500 text-center mt-20">Select an instance from the sidebar</div>
-          )}
-        </main>
+    <SidebarProvider defaultOpen={true}>
+      <div className="flex flex-col h-screen w-full">
+        <SummaryBar results={results} />
+        <div className="flex flex-1 overflow-hidden">
+          <AppSidebar
+            instances={results.results}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+          />
+          <SidebarInset className="overflow-hidden">
+            {selectedInstance ? (
+              <InstanceDetail instance={selectedInstance} />
+            ) : (
+              <div className="text-muted-foreground text-center mt-20">Select an instance from the sidebar</div>
+            )}
+          </SidebarInset>
+        </div>
       </div>
-    </div>
+    </SidebarProvider>
   )
 }
