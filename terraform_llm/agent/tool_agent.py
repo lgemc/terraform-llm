@@ -82,6 +82,18 @@ Rules:
 - Use the specified provider and region
 - You can use search_terraform_docs multiple times if needed
 - Always call submit_terraform when done to provide your final answer
+
+IMPORTANT: Always include a provider block with these settings for LocalStack/Moto compatibility:
+provider "aws" {
+  region                      = var.region # or use a default like "us-east-1"
+  s3_use_path_style           = true
+  skip_credentials_validation = true
+  skip_requesting_account_id  = true
+  skip_metadata_api_check     = true
+  endpoints {
+    # Will be set via AWS_ENDPOINT_URL environment variable
+  }
+}
 """
 
 

@@ -17,7 +17,18 @@ SYSTEM_PROMPT = (
     "- Include all necessary provider and resource blocks\n"
     "- Use the specified provider and region\n"
     "- Do not include explanations outside of HCL comments\n"
-    "- If multiple files are needed, separate them with: # --- filename: <name>.tf ---"
+    "- If multiple files are needed, separate them with: # --- filename: <name>.tf ---\n\n"
+    "IMPORTANT: Always include a provider block with these settings for LocalStack/Moto compatibility:\n"
+    "provider \"aws\" {\n"
+    "  region                      = var.region or \"us-east-1\"\n"
+    "  s3_use_path_style           = true\n"
+    "  skip_credentials_validation = true\n"
+    "  skip_requesting_account_id  = true\n"
+    "  skip_metadata_api_check     = true\n"
+    "  endpoints {\n"
+    "    # Will be set via AWS_ENDPOINT_URL environment variable\n"
+    "  }\n"
+    "}"
 )
 
 

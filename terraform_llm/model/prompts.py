@@ -13,6 +13,18 @@ Key guidelines:
 - Define useful outputs
 - Add comments for complex configurations
 - Ensure security best practices (encryption, least privilege, etc.)
+
+IMPORTANT: Always include a provider block with these settings for LocalStack/Moto compatibility:
+provider "aws" {
+  region                      = var.region # or use a default like "us-east-1"
+  s3_use_path_style           = true
+  skip_credentials_validation = true
+  skip_requesting_account_id  = true
+  skip_metadata_api_check     = true
+  endpoints {
+    # Will be set via AWS_ENDPOINT_URL environment variable
+  }
+}
 """
 
 
