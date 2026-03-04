@@ -20,7 +20,7 @@ class ApigwLambdaS3DynamodbValidation:
         self.apigateway = boto3.client('apigateway', **client_kwargs)
         self.dynamodb = boto3.client('dynamodb', **client_kwargs)
         self.iam = boto3.client('iam', **client_kwargs)
-        self.lambda = boto3.client('lambda', **client_kwargs)
+        self.lambda_client = boto3.client('lambda', **client_kwargs)
         self.s3 = boto3.client('s3', **client_kwargs)
 
     def validate(self) -> Dict[str, Any]:
