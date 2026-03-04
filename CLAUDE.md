@@ -16,8 +16,8 @@ uv run python -m terraform_llm.cli benchmark dataset/ -o output --instance-id te
 # Run without Docker (needs terraform on host)
 uv run python -m terraform_llm.cli benchmark dataset/ -o output --no-docker
 
-# Run with apply (default is plan-only)
-uv run python -m terraform_llm.cli benchmark dataset/ -o output --run-apply
+# Run plan-only (default runs full apply)
+uv run python -m terraform_llm.cli benchmark dataset/ -o output --no-run-apply
 
 # Skip LLM generation, reuse existing .tf files
 uv run python -m terraform_llm.cli benchmark dataset/ -o output --skip-generation
