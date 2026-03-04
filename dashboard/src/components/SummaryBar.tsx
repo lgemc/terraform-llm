@@ -1,9 +1,13 @@
 import type { BenchmarkResults } from '../types'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
+import { Button } from '@/components/ui/button'
+import { ArrowLeft } from 'lucide-react'
 
 interface Props {
   results: BenchmarkResults
+  showBack?: boolean
+  onBack?: () => void
 }
 
 function scoreColor(score: number) {
@@ -18,9 +22,18 @@ function rateColor(rate: number) {
   return 'border-red-700 text-red-400'
 }
 
-export function SummaryBar({ results }: Props) {
+export function SummaryBar({ results, showBack, onBack }: Props) {
   return (
     <header className="border-b bg-card px-6 py-3 flex items-center gap-6 shrink-0">
+      {showBack && (
+        <>
+          <Button variant="ghost" size="sm" onClick={onBack} className="gap-1.5">
+            <ArrowLeft className="h-4 w-4" />
+            All Models
+          </Button>
+          <Separator orientation="vertical" className="h-6" />
+        </>
+      )}
       <h1 className="font-bold text-lg">Terraform LLM Benchmark</h1>
       <Separator orientation="vertical" className="h-6" />
       <div className="flex items-center gap-4 text-sm flex-wrap">
