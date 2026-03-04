@@ -6,7 +6,86 @@ import { Button } from '@/components/ui/button'
 import { FolderOpen, FileJson, Files } from 'lucide-react'
 
 interface Props {
-  onDataLoaded: (data: BenchmarkResults | TrajectoryFile[]) => void
+  onDataLoaded: (data: BenchmarkResults[] | BenchmarkResults | TrajectoryFile[]) => void
+}
+
+function buildBenchmarkFromTrajectories(trajectories: TrajectoryFile[]): BenchmarkResults {
+  const instances = trajectories.map(traj => ({
+    instance_id: traj.instance_id,
+    model: traj.info.model,
+    total_score: traj.info.total_score,
+    stages: traj.stages,
+    generated_files: traj.generated_files,
+    error: null,
+    problem_statement: traj.info.problem_statement,
+    total_time_seconds: traj.info.total_time_seconds,
+    expected_resources: traj.info.expected_resources,
+  }))
+  const scores = instances.map(i => i.total_score)
+  const meanScore = scores.length > 0 ? scores.reduce((a, b) => a + b, 0) / scores.length : 0
+
+  const stageNames = new Set<string>()
+  instances.forEach(i => i.stages.forEach(s => stageNames.add(s.stage)))
+  const stagePassRates: Record<string, number> = {}
+  for (const name of stageNames) {
+    const stages = instances.map(i => i.stages.find(s => s.stage === name)).filter(Boolean)
+    const passed = stages.filter(s => s!.status === 'passed').length
+    stagePassRates[name] = stages.length > 0 ? passed / stages.length : 0
+  }
+
+  return {
+    model: instances[0]?.model || 'unknown',
+    mean_score: meanScore,
+    stage_pass_rates: stagePassRates,
+    num_instances: instances.length,
+    results: instances,
+  }
+}
+
+function enrichBenchmarkWithTrajectories(benchData: BenchmarkResults, trajFiles: TrajectoryFile[]): BenchmarkResults {
+  const trajMap = new Map<string, TrajectoryFile>()
+  for (const traj of trajFiles) {
+    trajMap.set(traj.instance_id, traj)
+  }
+
+  for (const result of benchData.results) {
+    const traj = trajMap.get(result.instance_id)
+    if (traj) {
+      result.problem_statement = traj.info.problem_statement
+      result.total_time_seconds = traj.info.total_time_seconds
+      result.expected_resources = traj.info.expected_resources
+      trajMap.delete(result.instance_id)
+    }
+  }
+
+  for (const traj of trajMap.values()) {
+    benchData.results.push({
+      instance_id: traj.instance_id,
+      model: traj.info.model,
+      total_score: traj.info.total_score,
+      stages: traj.stages,
+      generated_files: traj.generated_files,
+      error: null,
+      problem_statement: traj.info.problem_statement,
+      total_time_seconds: traj.info.total_time_seconds,
+      expected_resources: traj.info.expected_resources,
+    })
+  }
+
+  benchData.num_instances = benchData.results.length
+  const scores = benchData.results.map(r => r.total_score)
+  benchData.mean_score = scores.reduce((a, b) => a + b, 0) / scores.length
+
+  const stageNames = new Set<string>()
+  benchData.results.forEach(r => r.stages.forEach(s => stageNames.add(s.stage)))
+  benchData.stage_pass_rates = {}
+  for (const name of stageNames) {
+    const stages = benchData.results.map(r => r.stages.find(s => s.stage === name)).filter(Boolean)
+    const passed = stages.filter(s => s!.status === 'passed').length
+    benchData.stage_pass_rates[name] = stages.length > 0 ? passed / stages.length : 0
+  }
+
+  return benchData
 }
 
 export function DataLoader({ onDataLoaded }: Props) {
@@ -17,66 +96,103 @@ export function DataLoader({ onDataLoaded }: Props) {
     setError(null)
     const fileArray = Array.from(files)
 
-    // Collect .traj.json files
-    const trajFiles = fileArray.filter(f => f.name.endsWith('.traj.json'))
+    // Group files by their top-level subfolder (model name)
+    // e.g. "claude/benchmark_results.json" → "claude"
+    //      "claude/instance-001/instance-001.traj.json" → "claude"
+    const modelFolders = new Map<string, File[]>()
+    const rootFiles: File[] = []
 
-    // Check for benchmark_results.json
-    const benchmarkFile = fileArray.find(f => f.name === 'benchmark_results.json')
+    for (const file of fileArray) {
+      const path = file.webkitRelativePath || file.name
+      const parts = path.split('/')
+      // parts[0] is the selected folder name (e.g. "output")
+      // parts[1] would be a subfolder (model name) or a root file
+      if (parts.length >= 3) {
+        // File is inside a subfolder
+        const subFolder = parts[1]
+        if (!modelFolders.has(subFolder)) {
+          modelFolders.set(subFolder, [])
+        }
+        modelFolders.get(subFolder)!.push(file)
+      } else {
+        rootFiles.push(file)
+      }
+    }
 
-    if (benchmarkFile && trajFiles.length > 0) {
-      // Both benchmark_results.json and .traj.json files — merge them
+    // Check if any subfolders contain benchmark_results.json or .traj.json
+    const modelBenchmarks: BenchmarkResults[] = []
+    for (const [, folderFiles] of modelFolders) {
+      const benchFile = folderFiles.find(f => f.name === 'benchmark_results.json')
+      const trajFiles = folderFiles.filter(f => f.name.endsWith('.traj.json'))
+
+      if (benchFile) {
+        try {
+          const text = await benchFile.text()
+          let benchData = JSON.parse(text) as BenchmarkResults
+          if (benchData.results && Array.isArray(benchData.results)) {
+            if (trajFiles.length > 0) {
+              const trajs: TrajectoryFile[] = []
+              for (const tf of trajFiles) {
+                const t = await tf.text()
+                const parsed = JSON.parse(t)
+                trajs.push(isATIFTrajectory(parsed) ? atifToTrajectory(parsed) : parsed as TrajectoryFile)
+              }
+              benchData = enrichBenchmarkWithTrajectories(benchData, trajs)
+            }
+            modelBenchmarks.push(benchData)
+          }
+        } catch {
+          // skip malformed subfolder
+        }
+      } else if (trajFiles.length > 0) {
+        try {
+          const trajs: TrajectoryFile[] = []
+          for (const tf of trajFiles) {
+            const t = await tf.text()
+            const parsed = JSON.parse(t)
+            trajs.push(isATIFTrajectory(parsed) ? atifToTrajectory(parsed) : parsed as TrajectoryFile)
+          }
+          modelBenchmarks.push(buildBenchmarkFromTrajectories(trajs))
+        } catch {
+          // skip malformed subfolder
+        }
+      }
+    }
+
+    // If we found multiple models, return them as an array
+    if (modelBenchmarks.length > 1) {
+      onDataLoaded(modelBenchmarks)
+      return
+    }
+
+    // If exactly one model subfolder, treat as single model
+    if (modelBenchmarks.length === 1) {
+      onDataLoaded(modelBenchmarks[0])
+      return
+    }
+
+    // Fallback: process root-level files (original behavior)
+    const trajFiles = rootFiles.filter(f => f.name.endsWith('.traj.json'))
+    const benchmarkFile = rootFiles.find(f => f.name === 'benchmark_results.json')
+
+    // Also check all files (flat selection without webkitRelativePath)
+    const allTrajFiles = fileArray.filter(f => f.name.endsWith('.traj.json'))
+    const allBenchmarkFile = fileArray.find(f => f.name === 'benchmark_results.json')
+
+    const effectiveBenchFile = benchmarkFile || allBenchmarkFile
+    const effectiveTrajFiles = trajFiles.length > 0 ? trajFiles : allTrajFiles
+
+    if (effectiveBenchFile && effectiveTrajFiles.length > 0) {
       try {
-        const benchText = await benchmarkFile.text()
-        const benchData = JSON.parse(benchText) as BenchmarkResults
-
-        const trajMap = new Map<string, TrajectoryFile>()
-        for (const file of trajFiles) {
+        const benchText = await effectiveBenchFile.text()
+        let benchData = JSON.parse(benchText) as BenchmarkResults
+        const trajs: TrajectoryFile[] = []
+        for (const file of effectiveTrajFiles) {
           const text = await file.text()
           const parsed = JSON.parse(text)
-          const traj = isATIFTrajectory(parsed) ? atifToTrajectory(parsed) : parsed as TrajectoryFile
-          trajMap.set(traj.instance_id, traj)
+          trajs.push(isATIFTrajectory(parsed) ? atifToTrajectory(parsed) : parsed as TrajectoryFile)
         }
-
-        // Enrich benchmark results with trajectory data
-        for (const result of benchData.results) {
-          const traj = trajMap.get(result.instance_id)
-          if (traj) {
-            result.problem_statement = traj.info.problem_statement
-            result.total_time_seconds = traj.info.total_time_seconds
-            result.expected_resources = traj.info.expected_resources
-            trajMap.delete(result.instance_id)
-          }
-        }
-
-        // Add any trajectory instances not in benchmark_results
-        for (const traj of trajMap.values()) {
-          benchData.results.push({
-            instance_id: traj.instance_id,
-            model: traj.info.model,
-            total_score: traj.info.total_score,
-            stages: traj.stages,
-            generated_files: traj.generated_files,
-            error: null,
-            problem_statement: traj.info.problem_statement,
-            total_time_seconds: traj.info.total_time_seconds,
-            expected_resources: traj.info.expected_resources,
-          })
-        }
-
-        // Recalculate summary stats
-        benchData.num_instances = benchData.results.length
-        const scores = benchData.results.map(r => r.total_score)
-        benchData.mean_score = scores.reduce((a, b) => a + b, 0) / scores.length
-
-        const stageNames = new Set<string>()
-        benchData.results.forEach(r => r.stages.forEach(s => stageNames.add(s.stage)))
-        benchData.stage_pass_rates = {}
-        for (const name of stageNames) {
-          const stages = benchData.results.map(r => r.stages.find(s => s.stage === name)).filter(Boolean)
-          const passed = stages.filter(s => s!.status === 'passed').length
-          benchData.stage_pass_rates[name] = stages.length > 0 ? passed / stages.length : 0
-        }
-
+        benchData = enrichBenchmarkWithTrajectories(benchData, trajs)
         onDataLoaded(benchData)
         return
       } catch {
@@ -85,9 +201,9 @@ export function DataLoader({ onDataLoaded }: Props) {
       }
     }
 
-    if (benchmarkFile) {
+    if (effectiveBenchFile) {
       try {
-        const text = await benchmarkFile.text()
+        const text = await effectiveBenchFile.text()
         const data = JSON.parse(text) as BenchmarkResults
         if (data.results && Array.isArray(data.results)) {
           onDataLoaded(data)
@@ -99,10 +215,10 @@ export function DataLoader({ onDataLoaded }: Props) {
       }
     }
 
-    if (trajFiles.length > 0) {
+    if (effectiveTrajFiles.length > 0) {
       try {
         const trajectories: TrajectoryFile[] = []
-        for (const file of trajFiles) {
+        for (const file of effectiveTrajFiles) {
           const text = await file.text()
           const parsed = JSON.parse(text)
           trajectories.push(isATIFTrajectory(parsed) ? atifToTrajectory(parsed) : parsed as TrajectoryFile)
