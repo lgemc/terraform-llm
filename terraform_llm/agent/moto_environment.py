@@ -19,12 +19,14 @@ class MotoDockerEnvironment:
         work_dir: str,
         image: str = "hashicorp/terraform:latest",
         moto_image: str = "motoserver/moto:latest",
+        port: int = 5555,
         timeout: int = 600,
         logger: Optional[logging.Logger] = None,
     ):
         self.work_dir = Path(work_dir)
         self.image = image
         self.moto_image = moto_image
+        self.port = port
         self.timeout = timeout
         self.logger = logger or logging.getLogger(__name__)
 
@@ -64,7 +66,7 @@ class MotoDockerEnvironment:
             "docker", "run", "-d",
             "--name", container_name,
             "--network", self.network_name,
-            "-p", "5000:5000",
+            "-p", f"{self.port}:5000",
             "-e", "MOTO_IAM_LOAD_MANAGED_POLICIES=true",
             self.moto_image,
         ]
@@ -169,7 +171,7 @@ class MotoDockerEnvironment:
         raise RuntimeError(f"DNS verification failed after {max_retries} attempts - Moto container not resolvable on network {self.network_name}")
 
     def _wait_for_moto(self) -> None:
-        """Wait for moto to be ready by checking if port 5000 is accepting connections."""
+        """Wait for moto to be ready by checking if its port is accepting connections."""
         max_retries = 30
 
         self.logger.info("Waiting for Moto to be ready...")
