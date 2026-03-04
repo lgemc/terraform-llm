@@ -176,7 +176,12 @@ def benchmark_command(
     use_docker: bool = typer.Option(
         True,
         "--docker/--no-docker",
-        help="Use Docker + LocalStack for isolated execution (recommended)",
+        help="Use Docker + AWS emulator for isolated execution (recommended)",
+    ),
+    backend: str = typer.Option(
+        "localstack",
+        "--backend",
+        help="AWS emulator backend: 'localstack' (paid for RDS) or 'moto' (fully open source)",
     ),
     terraform_image: str = typer.Option(
         "hashicorp/terraform:latest",
@@ -187,6 +192,11 @@ def benchmark_command(
         "localstack/localstack:latest",
         "--localstack-image",
         help="Docker image for LocalStack",
+    ),
+    moto_image: str = typer.Option(
+        "motoserver/moto:latest",
+        "--moto-image",
+        help="Docker image for Moto",
     ),
     skip_generation: bool = typer.Option(
         False,
@@ -201,11 +211,11 @@ def benchmark_command(
         help="Number of parallel workers for benchmark execution (default: 3)",
     ),
 ):
-    """Run benchmark evaluation with optional Docker + LocalStack execution."""
+    """Run benchmark evaluation with optional Docker + AWS emulator execution."""
     rprint(f"[bold]Running benchmark on dataset:[/bold] {dataset}")
 
     if use_docker:
-        rprint("[bold]Execution mode:[/bold] Docker + LocalStack")
+        rprint(f"[bold]Execution mode:[/bold] Docker + {backend.capitalize()}")
     else:
         rprint("[bold]Execution mode:[/bold] Local Terraform")
 
@@ -255,6 +265,11 @@ def benchmark_command(
         reasoning_effort=reasoning_effort,
     )
 
+    # Validate backend choice
+    if backend not in ["localstack", "moto"]:
+        console.print(f"[red]Error: Invalid backend '{backend}'. Must be 'localstack' or 'moto'[/red]")
+        raise typer.Exit(code=1)
+
     # Create evaluation configuration
     eval_config = EvalConfig(
         run_apply=run_apply,
@@ -269,18 +284,28 @@ def benchmark_command(
     report = BenchmarkReport(model=model_config.model)
     output_base = Path(output_dir)
 
-    # Create shared docker environment for parallel execution
+    # Create shared docker environment for all instances
     shared_docker_env = None
-    if use_docker and parallel > 1:
-        console.print("[bold]Creating shared Docker + LocalStack environment for parallel execution...[/bold]")
-        from terraform_llm.agent.docker_environment import LocalstackDockerEnvironment
-        # Use a dummy work_dir - each instance will use its own instance_dir
-        shared_docker_env = LocalstackDockerEnvironment(
-            work_dir=str(output_base),
-            image=terraform_image,
-            localstack_image=localstack_image,
-        )
-        console.print("[green]Shared environment ready[/green]")
+    if use_docker:
+        env_label = "shared" if parallel > 1 else "Docker"
+        console.print(f"[bold]Creating {env_label} {backend.capitalize()} environment...[/bold]")
+
+        if backend == "localstack":
+            from terraform_llm.agent.docker_environment import LocalstackDockerEnvironment
+            shared_docker_env = LocalstackDockerEnvironment(
+                work_dir=str(output_base),
+                image=terraform_image,
+                localstack_image=localstack_image,
+            )
+        elif backend == "moto":
+            from terraform_llm.agent.moto_environment import MotoDockerEnvironment
+            shared_docker_env = MotoDockerEnvironment(
+                work_dir=str(output_base),
+                image=terraform_image,
+                moto_image=moto_image,
+            )
+
+        console.print(f"[green]{backend.capitalize()} environment ready[/green]")
 
     # Choose parallel or sequential execution
     try:
@@ -328,9 +353,9 @@ def benchmark_command(
                 if instance_result:
                     report.results.append(instance_result)
     finally:
-        # Clean up shared docker environment
+        # Clean up docker environment
         if shared_docker_env is not None:
-            console.print("\n[bold]Cleaning up shared Docker environment...[/bold]")
+            console.print("\n[bold]Cleaning up Docker environment...[/bold]")
             shared_docker_env.cleanup()
             console.print("[green]Cleanup complete[/green]")
 
@@ -339,7 +364,7 @@ def benchmark_command(
     console.print("[bold]BENCHMARK RESULTS[/bold]", justify="center")
     console.print("=" * 60)
     console.print(f"Model: {model_config.model}")
-    console.print(f"Execution: {'Docker + LocalStack' if use_docker else 'Local'}")
+    console.print(f"Execution: {'Docker + ' + backend.capitalize() if use_docker else 'Local'}")
     console.print(f"Total instances: {len(report.results)}")
     console.print(f"Mean score: {report.mean_score:.2f}")
 

@@ -31,6 +31,9 @@ from terraform_llm.agent.agent import (
 from terraform_llm.agent.docker_environment import (
     LocalstackDockerEnvironment,
 )
+from terraform_llm.agent.moto_environment import (
+    MotoDockerEnvironment,
+)
 
 __all__ = [
     "StageStatus",
@@ -50,4 +53,5 @@ __all__ = [
     "run_instance",
     "run_benchmark",
     "LocalstackDockerEnvironment",
+    "MotoDockerEnvironment",
 ]
