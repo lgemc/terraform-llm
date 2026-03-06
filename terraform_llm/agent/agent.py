@@ -228,7 +228,8 @@ def _build_validation_feedback(result: InstanceResult) -> str:
 
     for stage in result.stages:
         if stage.status.value == "failed":
-            feedback_parts.append(f"- {stage.stage} failed: {stage.raw_output[:500]}")
+            # Include full output (up to 3000 chars) to capture complete diagnostics
+            feedback_parts.append(f"- {stage.stage} failed: {stage.raw_output[:3000]}")
 
     if not feedback_parts:
         feedback_parts.append("Previous attempt had issues. Please review and improve the configuration.")

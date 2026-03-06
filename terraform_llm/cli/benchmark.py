@@ -9,6 +9,7 @@ import threading
 import typer
 from rich import print as rprint
 from rich.console import Console
+from omegaconf import OmegaConf
 
 from terraform_llm.agent import ModelConfig, EvalConfig, run_instance, generate_hcl
 from terraform_llm.agent.evaluator import evaluate_instance
@@ -79,6 +80,7 @@ def process_instance(
             atif_traj.extra.update({
                 "total_time_seconds": time.time() - instance_start,
                 "model_config": model_config.to_dict(),
+                "eval_config": eval_config.to_dict(),
             })
         else:
             # Fallback: build trajectory from result (for skip_generation mode)
@@ -102,6 +104,7 @@ def process_instance(
                 "total_score": instance_result.total_score,
                 "total_time_seconds": time.time() - instance_start,
                 "model_config": model_config.to_dict(),
+                "eval_config": eval_config.to_dict(),
             })
             if instance_result.error:
                 atif_traj.extra["error"] = instance_result.error
@@ -142,24 +145,30 @@ def process_instance(
 
 
 def benchmark_command(
-    dataset: str = typer.Argument(
-        ...,
+    dataset: Optional[str] = typer.Argument(
+        None,
         help="Path to dataset file or directory (loads all .jsonl files recursively from directories)",
     ),
-    output_dir: str = typer.Option("output", "-o", "--output-dir", help="Output directory"),
-    model: str = typer.Option(
-        "anthropic/claude-3-5-sonnet-20241022",
+    config_file: Optional[str] = typer.Option(
+        None,
+        "--config-file",
+        "-c",
+        help="Path to YAML config file (relative to configs/ directory or absolute path)",
+    ),
+    output_dir: Optional[str] = typer.Option(None, "-o", "--output-dir", help="Output directory"),
+    model: Optional[str] = typer.Option(
+        None,
         help="Model identifier (e.g., anthropic/claude-sonnet-4-5-20250929, openai/gpt-4o)",
     ),
-    temperature: float = typer.Option(0.0, help="Model temperature"),
-    max_tokens: int = typer.Option(16384, help="Maximum tokens for model generation"),
-    agent_type: str = typer.Option(
-        "simple",
+    temperature: Optional[float] = typer.Option(None, help="Model temperature"),
+    max_tokens: Optional[int] = typer.Option(None, help="Maximum tokens for model generation"),
+    agent_type: Optional[str] = typer.Option(
+        None,
         "--agent-type",
         help="Agent type: 'simple' (direct generation) or 'tool-enabled' (with doc search)",
     ),
-    max_tool_iterations: int = typer.Option(
-        5,
+    max_tool_iterations: Optional[int] = typer.Option(
+        None,
         "--max-tool-iterations",
         help="Maximum iterations for tool-enabled agent",
     ),
@@ -173,13 +182,13 @@ def benchmark_command(
         "--reasoning-effort",
         help="Reasoning effort for reasoning models (low, medium, high) - enables extended thinking",
     ),
-    multiturn: bool = typer.Option(
-        False,
+    multiturn: Optional[bool] = typer.Option(
+        None,
         "--multiturn",
         help="Enable multiturn refinement: agent receives validation feedback and iterates",
     ),
-    max_multiturn_iterations: int = typer.Option(
-        3,
+    max_multiturn_iterations: Optional[int] = typer.Option(
+        None,
         "--max-multiturn-iterations",
         help="Maximum multiturn refinement iterations (default: 3)",
     ),
@@ -192,55 +201,217 @@ def benchmark_command(
     tags: Optional[List[str]] = typer.Option(
         None, "--tag", help="Filter by tags (can be specified multiple times)",
     ),
-    run_apply: bool = typer.Option(True, help="Run terraform apply (creates infrastructure)"),
-    use_docker: bool = typer.Option(
-        True,
+    run_apply: Optional[bool] = typer.Option(None, help="Run terraform apply (creates infrastructure)"),
+    use_docker: Optional[bool] = typer.Option(
+        None,
         "--docker/--no-docker",
         help="Use Docker + AWS emulator for isolated execution (recommended)",
     ),
-    backend: str = typer.Option(
-        "localstack",
+    backend: Optional[str] = typer.Option(
+        None,
         "--backend",
         help="AWS emulator backend: 'localstack' (paid for RDS) or 'moto' (fully open source)",
     ),
-    terraform_image: str = typer.Option(
-        "hashicorp/terraform:latest",
+    terraform_image: Optional[str] = typer.Option(
+        None,
         "--terraform-image",
         help="Docker image for Terraform",
     ),
-    localstack_image: str = typer.Option(
-        "localstack/localstack:latest",
+    localstack_image: Optional[str] = typer.Option(
+        None,
         "--localstack-image",
         help="Docker image for LocalStack",
     ),
-    moto_image: str = typer.Option(
-        "motoserver/moto:latest",
+    moto_image: Optional[str] = typer.Option(
+        None,
         "--moto-image",
         help="Docker image for Moto",
     ),
-    skip_generation: bool = typer.Option(
-        False,
+    skip_generation: Optional[bool] = typer.Option(
+        None,
         "--skip-generation",
         help="Skip code generation and reuse existing Terraform files from output directory",
     ),
-    verbose: bool = typer.Option(False, "-v", "--verbose", help="Verbose output"),
-    parallel: int = typer.Option(
-        3,
+    verbose: Optional[bool] = typer.Option(None, "-v", "--verbose", help="Verbose output"),
+    parallel: Optional[int] = typer.Option(
+        None,
         "--parallel",
         "-j",
         help="Number of parallel workers for benchmark execution (default: 3)",
     ),
 ):
     """Run benchmark evaluation with optional Docker + AWS emulator execution."""
-    rprint(f"[bold]Running benchmark on dataset:[/bold] {dataset}")
 
-    if use_docker:
-        rprint(f"[bold]Execution mode:[/bold] Docker + {backend.capitalize()}")
+    # Load configuration from YAML file if provided
+    if config_file:
+        config_path = Path(config_file)
+        if not config_path.is_absolute():
+            # Try relative to configs/ directory
+            config_path = Path("configs") / config_file
+            if not config_path.exists():
+                # Try with .yaml extension
+                config_path = Path("configs") / f"{config_file}.yaml"
+
+        if not config_path.exists():
+            console.print(f"[red]Error: Config file not found: {config_file}[/red]")
+            raise typer.Exit(code=1)
+
+        console.print(f"[bold]Loading config from:[/bold] {config_path}")
+        cfg = OmegaConf.load(config_path)
     else:
-        rprint("[bold]Execution mode:[/bold] Local Terraform")
+        # Load default config
+        default_config_path = Path("configs/config.yaml")
+        if default_config_path.exists():
+            cfg = OmegaConf.load(default_config_path)
+        else:
+            # Use empty config if no default exists
+            cfg = OmegaConf.create({})
 
-    if parallel > 1:
-        rprint(f"[bold]Parallelism:[/bold] {parallel} workers")
+    # Override config with CLI arguments (if provided)
+    cli_overrides = {}
+    if dataset is not None:
+        cli_overrides["dataset"] = dataset
+    if output_dir is not None:
+        cli_overrides["output_dir"] = output_dir
+    if model is not None:
+        cli_overrides.setdefault("model", {})["model"] = model
+    if temperature is not None:
+        cli_overrides.setdefault("model", {})["temperature"] = temperature
+    if max_tokens is not None:
+        cli_overrides.setdefault("model", {})["max_tokens"] = max_tokens
+    if agent_type is not None:
+        cli_overrides.setdefault("model", {})["agent_type"] = agent_type
+    if max_tool_iterations is not None:
+        cli_overrides.setdefault("model", {})["max_tool_iterations"] = max_tool_iterations
+    if docs_index_path is not None:
+        cli_overrides.setdefault("model", {})["docs_index_path"] = docs_index_path
+    if reasoning_effort is not None:
+        cli_overrides.setdefault("model", {})["reasoning_effort"] = reasoning_effort
+    if multiturn is not None:
+        cli_overrides.setdefault("model", {})["multiturn"] = multiturn
+    if max_multiturn_iterations is not None:
+        cli_overrides.setdefault("model", {})["max_multiturn_iterations"] = max_multiturn_iterations
+    if difficulty is not None:
+        cli_overrides["difficulty"] = difficulty
+    if filter_provider is not None:
+        cli_overrides["provider"] = filter_provider
+    if limit is not None:
+        cli_overrides["limit"] = limit
+    if instance_id is not None:
+        cli_overrides["instance_id"] = instance_id
+    if tags is not None:
+        cli_overrides["tags"] = tags
+    if run_apply is not None:
+        cli_overrides.setdefault("eval", {})["run_apply"] = run_apply
+    if use_docker is not None:
+        cli_overrides.setdefault("eval", {})["use_docker"] = use_docker
+    if backend is not None:
+        cli_overrides.setdefault("eval", {})["backend"] = backend
+    if terraform_image is not None:
+        cli_overrides.setdefault("eval", {})["terraform_image"] = terraform_image
+    if localstack_image is not None:
+        cli_overrides.setdefault("eval", {})["localstack_image"] = localstack_image
+    if moto_image is not None:
+        cli_overrides.setdefault("eval", {})["moto_image"] = moto_image
+    if skip_generation is not None:
+        cli_overrides.setdefault("execution", {})["skip_generation"] = skip_generation
+    if verbose is not None:
+        cli_overrides.setdefault("execution", {})["verbose"] = verbose
+    if parallel is not None:
+        cli_overrides.setdefault("execution", {})["parallel"] = parallel
+
+    # Merge CLI overrides into config
+    cfg = OmegaConf.merge(cfg, OmegaConf.create(cli_overrides))
+
+    # Extract values from config with defaults
+    dataset = cfg.get("dataset", "dataset/")
+    output_dir = cfg.get("output_dir", "output")
+    difficulty = cfg.get("difficulty", None)
+    filter_provider = cfg.get("provider", None)
+    limit = cfg.get("limit", None)
+    instance_id = cfg.get("instance_id", None)
+    tags = cfg.get("tags", None)
+
+    # Model config
+    model_cfg = cfg.get("model", {})
+    model = model_cfg.get("model", "anthropic/claude-3-5-sonnet-20241022")
+    temperature = model_cfg.get("temperature", 0.0)
+    max_tokens = model_cfg.get("max_tokens", 16384)
+    agent_type = model_cfg.get("agent_type", "simple")
+    max_tool_iterations = model_cfg.get("max_tool_iterations", 5)
+    docs_index_path = model_cfg.get("docs_index_path", None)
+    reasoning_effort = model_cfg.get("reasoning_effort", None)
+    multiturn = model_cfg.get("multiturn", False)
+    max_multiturn_iterations = model_cfg.get("max_multiturn_iterations", 3)
+
+    # Eval config
+    eval_cfg = cfg.get("eval", {})
+    run_apply = eval_cfg.get("run_apply", True)
+    use_docker = eval_cfg.get("use_docker", True)
+    backend = eval_cfg.get("backend", "localstack")
+    terraform_image = eval_cfg.get("terraform_image", "hashicorp/terraform:latest")
+    localstack_image = eval_cfg.get("localstack_image", "localstack/localstack:latest")
+    moto_image = eval_cfg.get("moto_image", "motoserver/moto:latest")
+
+    # Execution config
+    exec_cfg = cfg.get("execution", {})
+    skip_generation = exec_cfg.get("skip_generation", False)
+    verbose = exec_cfg.get("verbose", False)
+    parallel = exec_cfg.get("parallel", 3)
+
+    # Print configuration summary
+    console.print("\n" + "=" * 80)
+    console.print("[bold cyan]BENCHMARK CONFIGURATION[/bold cyan]", justify="center")
+    console.print("=" * 80)
+
+    if config_file:
+        console.print(f"[bold]Config file:[/bold] {config_path}")
+
+    console.print("\n[bold yellow]Dataset Configuration:[/bold yellow]")
+    console.print(f"  Dataset path: {dataset}")
+    console.print(f"  Output directory: {output_dir}")
+    if instance_id:
+        console.print(f"  Instance ID: {instance_id}")
+    if difficulty:
+        console.print(f"  Difficulty filter: {difficulty}")
+    if filter_provider:
+        console.print(f"  Provider filter: {filter_provider}")
+    if tags:
+        console.print(f"  Tags filter: {tags}")
+    if limit:
+        console.print(f"  Limit: {limit} instances")
+
+    console.print("\n[bold yellow]Model Configuration:[/bold yellow]")
+    console.print(f"  Model: {model}")
+    console.print(f"  Temperature: {temperature}")
+    console.print(f"  Max tokens: {max_tokens}")
+    console.print(f"  Agent type: {agent_type}")
+    if agent_type == "tool-enabled":
+        console.print(f"  Max tool iterations: {max_tool_iterations}")
+        console.print(f"  Docs index path: {docs_index_path}")
+    if reasoning_effort:
+        console.print(f"  Reasoning effort: {reasoning_effort}")
+    console.print(f"  Multiturn: {multiturn}")
+    if multiturn:
+        console.print(f"  Max multiturn iterations: {max_multiturn_iterations}")
+
+    console.print("\n[bold yellow]Evaluation Configuration:[/bold yellow]")
+    console.print(f"  Run apply: {run_apply}")
+    console.print(f"  Use Docker: {use_docker}")
+    if use_docker:
+        console.print(f"  Backend: {backend}")
+        console.print(f"  Terraform image: {terraform_image}")
+        if backend == "localstack":
+            console.print(f"  LocalStack image: {localstack_image}")
+        elif backend == "moto":
+            console.print(f"  Moto image: {moto_image}")
+
+    console.print("\n[bold yellow]Execution Configuration:[/bold yellow]")
+    console.print(f"  Parallel workers: {parallel}")
+    console.print(f"  Skip generation: {skip_generation}")
+    console.print(f"  Verbose: {verbose}")
+
+    console.print("=" * 80 + "\n")
 
     # Load dataset
     try:
@@ -264,6 +435,8 @@ def benchmark_command(
         if not instances:
             console.print("[red]No instances found matching the filters[/red]")
             raise typer.Exit(code=1)
+
+        console.print(f"[bold green]Loaded {len(instances)} instance(s) for processing[/bold green]\n")
 
     except FileNotFoundError:
         console.print(f"[red]Error: Dataset not found: {dataset}[/red]")
@@ -298,8 +471,10 @@ def benchmark_command(
         run_destroy=True,
         run_validation=run_apply,
         use_docker=use_docker,
+        backend=backend,
         terraform_image=terraform_image,
         localstack_image=localstack_image,
+        moto_image=moto_image,
     )
 
     # Process instances
@@ -404,6 +579,14 @@ def benchmark_command(
     # Save aggregate results with metadata
     results_data = report.to_dict()
     results_data["model_config"] = model_config.to_dict()
+    results_data["eval_config"] = eval_config.to_dict()
+    results_data["execution_config"] = {
+        "parallel": parallel,
+        "skip_generation": skip_generation,
+        "verbose": verbose,
+    }
+    if config_file:
+        results_data["config_file"] = str(config_path)
     results_data["output_dir"] = str(output_base)
 
     results_path = output_base / "benchmark_results.json"

@@ -1183,6 +1183,196 @@ def failures_command(
         console.print("[dim]Use --verbose to see full output from failed stages[/dim]")
 
 
+@traces_app.command(name="iterations")
+def iterations_command(
+    trace_path: str = typer.Argument(
+        ...,
+        help="Path to trajectory file from a multiturn run"
+    ),
+    iteration: Optional[int] = typer.Option(
+        None,
+        "--iteration", "-i",
+        help="Show specific iteration (1-indexed)"
+    ),
+    stage: Optional[str] = typer.Option(
+        None,
+        "--stage", "-s",
+        help="Show specific stage within iterations (e.g., 'validate', 'plan')"
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose", "-v",
+        help="Show full output from stages"
+    ),
+):
+    """
+    Show iteration-by-iteration breakdown for multiturn runs.
+
+    For multiturn agents that refine code through multiple iterations,
+    this command shows how the agent progressed through each iteration.
+
+    Examples:
+
+        # Show all iterations summary
+        uv run python -m terraform_llm.cli traces iterations output/qwen-3.5:4b-multiturn-3/terraform-aws-r53-weighted-001/terraform-aws-r53-weighted-001.traj.json
+
+        # Show specific iteration
+        uv run python -m terraform_llm.cli traces iterations output/.../trace.traj.json --iteration 2
+
+        # Show validate stage across all iterations
+        uv run python -m terraform_llm.cli traces iterations output/.../trace.traj.json --stage validate
+
+        # Show validate stage for specific iteration with full output
+        uv run python -m terraform_llm.cli traces iterations output/.../trace.traj.json --iteration 2 --stage validate --verbose
+    """
+    path = Path(trace_path)
+
+    if not path.exists():
+        console.print(f"[red]Error: File not found: {trace_path}[/red]")
+        raise typer.Exit(code=1)
+
+    try:
+        with open(path) as f:
+            trace = json.load(f)
+    except json.JSONDecodeError as e:
+        console.print(f"[red]Error: Invalid JSON in {path.name}: {e}[/red]")
+        raise typer.Exit(code=1)
+
+    # Check if ATIF format
+    if not is_atif_trajectory(trace):
+        console.print("[red]Error: This command only supports ATIF format trajectories[/red]")
+        raise typer.Exit(code=1)
+
+    # Extract steps and group by iteration
+    steps = trace.get("steps", [])
+    system_steps = [s for s in steps if s.get("source") == "system"]
+
+    # Group steps by iteration number
+    iterations_dict = {}
+    for step in system_steps:
+        iter_num = step.get("extra", {}).get("iteration")
+        if iter_num is not None:
+            iterations_dict.setdefault(iter_num, []).append(step)
+
+    if not iterations_dict:
+        console.print("[yellow]No iteration information found in this trajectory.[/yellow]")
+        console.print("[dim]This may not be a multiturn run, or iteration data was not recorded.[/dim]")
+        raise typer.Exit(code=1)
+
+    max_iteration = max(iterations_dict.keys())
+    min_iteration = min(iterations_dict.keys())
+
+    # Extract basic info
+    instance_id = trace.get("extra", {}).get("instance_id", trace.get("session_id"))
+    model = trace.get("agent", {}).get("model_name")
+    total_score = trace.get("extra", {}).get("total_score", 0.0)
+
+    # Display header
+    console.print(Panel(
+        f"""[bold cyan]Instance:[/bold cyan] {instance_id}
+[bold cyan]Model:[/bold cyan] {model}
+[bold cyan]Total Score:[/bold cyan] {total_score:.2f}
+[bold cyan]Iterations:[/bold cyan] {min_iteration} - {max_iteration}""",
+        title="Multiturn Iteration Analysis",
+        border_style="cyan"
+    ))
+    console.print()
+
+    # If specific iteration requested
+    if iteration is not None:
+        if iteration not in iterations_dict:
+            console.print(f"[red]Error: Iteration {iteration} not found. Valid range: {min_iteration}-{max_iteration}[/red]")
+            raise typer.Exit(code=1)
+
+        console.print(f"[bold cyan]Iteration {iteration}:[/bold cyan]\n")
+
+        iter_steps = iterations_dict[iteration]
+
+        # If specific stage requested
+        if stage:
+            matching_steps = [s for s in iter_steps if s.get("extra", {}).get("stage") == stage]
+            if not matching_steps:
+                available_stages = [s.get("extra", {}).get("stage") for s in iter_steps]
+                console.print(f"[red]Error: Stage '{stage}' not found in iteration {iteration}[/red]")
+                console.print(f"[yellow]Available stages: {', '.join(available_stages)}[/yellow]")
+                raise typer.Exit(code=1)
+
+            for step in matching_steps:
+                _display_atif_stage(step, verbose)
+        else:
+            # Show all stages for this iteration
+            for step in iter_steps:
+                _display_atif_stage(step, verbose)
+
+    # If specific stage requested (across all iterations)
+    elif stage:
+        console.print(f"[bold cyan]Stage '{stage}' across all iterations:[/bold cyan]\n")
+
+        for iter_num in sorted(iterations_dict.keys()):
+            iter_steps = iterations_dict[iter_num]
+            matching_steps = [s for s in iter_steps if s.get("extra", {}).get("stage") == stage]
+
+            if matching_steps:
+                console.print(f"[bold yellow]Iteration {iter_num}:[/bold yellow]")
+                for step in matching_steps:
+                    _display_atif_stage(step, verbose)
+            else:
+                console.print(f"[dim]Iteration {iter_num}: Stage not found[/dim]\n")
+
+    # Otherwise show summary of all iterations
+    else:
+        console.print("[bold cyan]Iteration Summary:[/bold cyan]\n")
+
+        # Create a table for each iteration
+        for iter_num in sorted(iterations_dict.keys()):
+            iter_steps = iterations_dict[iter_num]
+
+            # Find generation step for this iteration
+            gen_steps = [s for s in steps if s.get("source") == "agent" and
+                        s.get("message", "").startswith(f"Generated") and
+                        f"iteration {iter_num}" in s.get("message", "").lower()]
+
+            table = Table(title=f"Iteration {iter_num}", box=box.ROUNDED)
+            table.add_column("Stage", style="cyan")
+            table.add_column("Status", justify="center")
+            table.add_column("Score", justify="right")
+            table.add_column("Duration", justify="right")
+            table.add_column("Message", style="dim")
+
+            for step in iter_steps:
+                extra = step.get("extra", {})
+                stage_name = extra.get("stage", "unknown")
+                status = extra.get("status", "unknown")
+                score = extra.get("score", 0.0)
+                duration = extra.get("duration_seconds", 0.0)
+                message = extra.get("message", "")
+
+                status_color = {
+                    "passed": "green",
+                    "failed": "red",
+                    "skipped": "yellow",
+                }.get(status, "white")
+
+                # Truncate message if too long
+                if len(message) > 50 and not verbose:
+                    message = message[:47] + "..."
+
+                table.add_row(
+                    stage_name,
+                    f"[{status_color}]{status}[/{status_color}]",
+                    f"{score:.2f}",
+                    f"{duration:.2f}s",
+                    message
+                )
+
+            console.print(table)
+            console.print()
+
+        console.print("[dim]Use --iteration N to see details for a specific iteration[/dim]")
+        console.print("[dim]Use --stage NAME to see a specific stage across all iterations[/dim]")
+        console.print("[dim]Use --verbose to see full stage output[/dim]")
+
+
 # Backward compatibility: keep traces_command as alias to show_command
 def traces_command(*args, **kwargs):
     """Deprecated: use 'traces show' instead."""

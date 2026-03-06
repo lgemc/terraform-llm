@@ -32,12 +32,49 @@ export interface InstanceResult {
   num_iterations?: number;
 }
 
+export interface ModelConfig {
+  model: string;
+  temperature: number;
+  max_tokens: number;
+  agent_type: string;
+  max_tool_iterations: number;
+  docs_index_path?: string | null;
+  reasoning_effort?: string | null;
+  multiturn?: boolean;
+  max_multiturn_iterations?: number;
+}
+
+export interface EvalConfig {
+  run_apply: boolean;
+  run_destroy: boolean;
+  run_validation: boolean;
+  init_timeout: number;
+  plan_timeout: number;
+  apply_timeout: number;
+  use_docker: boolean;
+  backend: string;
+  terraform_image: string;
+  localstack_image: string;
+  moto_image: string;
+}
+
+export interface ExecutionConfig {
+  parallel: number;
+  skip_generation: boolean;
+  verbose: boolean;
+}
+
 export interface BenchmarkResults {
   model: string;
   mean_score: number;
   stage_pass_rates: Record<string, number>;
   num_instances: number;
   results: InstanceResult[];
+  model_config?: ModelConfig;
+  eval_config?: EvalConfig;
+  execution_config?: ExecutionConfig;
+  config_file?: string;
+  output_dir?: string;
 }
 
 export interface TrajectoryFile {

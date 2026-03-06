@@ -23,8 +23,26 @@ class EvalConfig:
     apply_timeout: int = 600
     # Docker execution settings
     use_docker: bool = False
+    backend: str = "localstack"  # "localstack" or "moto"
     terraform_image: str = "hashicorp/terraform:latest"
     localstack_image: str = "localstack/localstack:latest"
+    moto_image: str = "motoserver/moto:latest"
+
+    def to_dict(self) -> dict:
+        """Convert to dictionary."""
+        return {
+            "run_apply": self.run_apply,
+            "run_destroy": self.run_destroy,
+            "run_validation": self.run_validation,
+            "init_timeout": self.init_timeout,
+            "plan_timeout": self.plan_timeout,
+            "apply_timeout": self.apply_timeout,
+            "use_docker": self.use_docker,
+            "backend": self.backend,
+            "terraform_image": self.terraform_image,
+            "localstack_image": self.localstack_image,
+            "moto_image": self.moto_image,
+        }
 
 
 def evaluate_instance(
