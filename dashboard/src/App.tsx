@@ -6,6 +6,7 @@ import { AppSidebar } from './components/Sidebar'
 import { InstanceDetail } from './components/InstanceDetail'
 import { SummaryBar } from './components/SummaryBar'
 import { ModelOverview } from './components/ModelOverview'
+import { ConfigPanel } from './components/ConfigPanel'
 import { SidebarProvider, SidebarInset } from '@/components/ui/sidebar'
 
 function trajectoryToInstance(traj: TrajectoryFile): InstanceResult {
@@ -271,7 +272,10 @@ export default function App() {
             selectedId={selectedId}
             onSelect={setSelectedId}
           />
-          <SidebarInset className="overflow-hidden">
+          <SidebarInset className="overflow-auto">
+            <div className="p-6 space-y-4">
+              <ConfigPanel results={results} />
+            </div>
             {selectedInstance ? (
               <InstanceDetail instance={selectedInstance} />
             ) : (
