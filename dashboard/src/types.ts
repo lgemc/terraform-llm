@@ -6,6 +6,15 @@ export interface Stage {
   duration_seconds: number;
   details: Record<string, unknown>;
   output?: string;
+  iteration?: number;  // Multi-turn iteration number
+}
+
+export interface Iteration {
+  iteration_number: number;
+  generated_files: Record<string, string>;
+  stages: Stage[];
+  score: number;
+  feedback?: string;
 }
 
 export interface InstanceResult {
@@ -18,6 +27,9 @@ export interface InstanceResult {
   problem_statement?: string;
   total_time_seconds?: number;
   expected_resources?: Record<string, number>;
+  iterations?: Iteration[];  // Multi-turn iterations
+  best_score?: number;
+  num_iterations?: number;
 }
 
 export interface BenchmarkResults {
@@ -41,6 +53,9 @@ export interface TrajectoryFile {
   };
   generated_files: Record<string, string>;
   stages: Stage[];
+  iterations?: Iteration[];
+  best_score?: number;
+  num_iterations?: number;
 }
 
 // ATIF (Agent Trajectory Interchange Format) types
@@ -101,9 +116,66 @@ export function atifToTrajectory(atif: ATIFTrajectory): TrajectoryFile {
       duration_seconds: (s.extra!.duration_seconds as number) ?? 0,
       details: (s.extra!.details as Record<string, unknown>) ?? {},
       output: s.observation?.results?.[0]?.content,
+      iteration: (s.extra!.iteration as number) ?? undefined,
     }));
 
   const extra = atif.extra ?? {};
+
+  // Extract iterations from ATIF steps (multi-turn support)
+  const iterations: Iteration[] = [];
+  const iterationMap = new Map<number, { stages: Stage[], generatedFiles?: Record<string, string>, feedback?: string }>();
+
+  for (const step of atif.steps) {
+    if (step.source === 'system' && step.extra?.iteration) {
+      const iterNum = step.extra.iteration as number;
+      if (!iterationMap.has(iterNum)) {
+        iterationMap.set(iterNum, { stages: [], generatedFiles: undefined, feedback: undefined });
+      }
+      const iterData = iterationMap.get(iterNum)!;
+      iterData.stages.push({
+        stage: step.extra.stage as string,
+        status: step.extra.status as Stage['status'],
+        score: (step.extra.score as number) ?? 0,
+        message: (step.extra.message as string) ?? step.message,
+        duration_seconds: (step.extra.duration_seconds as number) ?? 0,
+        details: (step.extra.details as Record<string, unknown>) ?? {},
+        output: step.observation?.results?.[0]?.content,
+        iteration: iterNum,
+      });
+    } else if (step.source === 'agent' && step.message.includes('Generated') && step.message.includes('Terraform file')) {
+      // Try to extract iteration number from message
+      const match = step.message.match(/iteration (\d+)/);
+      if (match) {
+        const iterNum = parseInt(match[1]);
+        if (!iterationMap.has(iterNum)) {
+          iterationMap.set(iterNum, { stages: [], generatedFiles: undefined, feedback: undefined });
+        }
+        // Note: generated_files are stored in extra.generated_files for the whole trajectory
+      }
+    } else if (step.source === 'user' && step.message.includes('fix')) {
+      // This is refinement feedback
+      const sortedIters = Array.from(iterationMap.keys()).sort((a, b) => b - a);
+      if (sortedIters.length > 0) {
+        const latestIter = iterationMap.get(sortedIters[0])!;
+        latestIter.feedback = step.message;
+      }
+    }
+  }
+
+  // Convert iteration map to array
+  for (const [iterNum, data] of Array.from(iterationMap.entries()).sort((a, b) => a[0] - b[0])) {
+    const iterScore = data.stages.length > 0
+      ? data.stages.reduce((sum, s) => sum + s.score, 0) / data.stages.length
+      : 0;
+
+    iterations.push({
+      iteration_number: iterNum,
+      generated_files: data.generatedFiles ?? {},
+      stages: data.stages,
+      score: iterScore,
+      feedback: data.feedback,
+    });
+  }
 
   return {
     trajectory_format: atif.schema_version,
@@ -118,5 +190,8 @@ export function atifToTrajectory(atif: ATIFTrajectory): TrajectoryFile {
     },
     generated_files: (extra.generated_files as Record<string, string>) ?? {},
     stages,
+    iterations: iterations.length > 0 ? iterations : undefined,
+    best_score: (extra.best_score as number) ?? undefined,
+    num_iterations: (extra.iterations as number) ?? (iterations.length > 0 ? iterations.length : undefined),
   };
 }

@@ -59,6 +59,7 @@ class InstanceResult:
     error: Optional[str] = None
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)  # Track tool calls (RAG searches, etc.)
     prompt: Optional[str] = None  # The actual prompt sent to the LLM
+    trajectory: Optional[Any] = None  # ATIF trajectory object (if generated)
 
     # Stages that are excluded from scoring (infrastructure setup, not model quality)
     _UNSCORED_STAGES = {"setup_script", "cleanup_script", "destroy"}
@@ -68,8 +69,6 @@ class InstanceResult:
         total_weight = 0.0
         weighted_sum = 0.0
         for stage in self.stages:
-            if stage.status == StageStatus.SKIPPED:
-                continue
             if stage.stage in self._UNSCORED_STAGES:
                 continue
             w = STAGE_WEIGHTS.get(stage.stage, 0.1)

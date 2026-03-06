@@ -19,7 +19,7 @@ class EventbridgeLambdaCronValidation:
 
         self.events = boto3.client('events', **client_kwargs)
         self.iam = boto3.client('iam', **client_kwargs)
-        self.lambda = boto3.client('lambda', **client_kwargs)
+        self.lambda_client = boto3.client('lambda', **client_kwargs)
 
     def validate(self) -> Dict[str, Any]:
         """

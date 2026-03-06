@@ -19,6 +19,9 @@ function trajectoryToInstance(traj: TrajectoryFile): InstanceResult {
     problem_statement: traj.info.problem_statement,
     total_time_seconds: traj.info.total_time_seconds,
     expected_resources: traj.info.expected_resources,
+    iterations: traj.iterations,
+    best_score: traj.best_score,
+    num_iterations: traj.num_iterations,
   }
 }
 
@@ -57,6 +60,9 @@ function enrichBenchmarkWithTrajectories(benchData: BenchmarkResults, trajFiles:
       result.problem_statement = traj.info.problem_statement
       result.total_time_seconds = traj.info.total_time_seconds
       result.expected_resources = traj.info.expected_resources
+      result.iterations = traj.iterations
+      result.best_score = traj.best_score
+      result.num_iterations = traj.num_iterations
       trajMap.delete(result.instance_id)
     }
   }
@@ -72,6 +78,9 @@ function enrichBenchmarkWithTrajectories(benchData: BenchmarkResults, trajFiles:
       problem_statement: traj.info.problem_statement,
       total_time_seconds: traj.info.total_time_seconds,
       expected_resources: traj.info.expected_resources,
+      iterations: traj.iterations,
+      best_score: traj.best_score,
+      num_iterations: traj.num_iterations,
     })
   }
 
