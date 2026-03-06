@@ -71,30 +71,40 @@ def process_instance(
                 inst, model_config, eval_config, work_dir=str(instance_dir), docker_env=docker_env,
             )
 
-        # Save ATIF trajectory
-        tracer = ATIFTracer(agent_version="1.0.0")
-        atif_traj = tracer.from_terraform_trajectory(
-            instance_id=inst.instance_id,
-            problem_statement=inst.problem_statement,
-            model=instance_result.model,
-            agent_type=model_config.agent_type,
-            generated_files=instance_result.generated_files,
-            stages=[s.to_dict() for s in instance_result.stages],
-            tool_calls=instance_result.tool_calls,
-            prompt=instance_result.prompt,
-        )
+        # Save ATIF trajectory (use from result if available, otherwise build it)
+        if instance_result.trajectory:
+            atif_traj = instance_result.trajectory
+            # Add extra metadata to trajectory
+            atif_traj.extra = atif_traj.extra or {}
+            atif_traj.extra.update({
+                "total_time_seconds": time.time() - instance_start,
+                "model_config": model_config.to_dict(),
+            })
+        else:
+            # Fallback: build trajectory from result (for skip_generation mode)
+            tracer = ATIFTracer(agent_version="1.0.0")
+            atif_traj = tracer.from_terraform_trajectory(
+                instance_id=inst.instance_id,
+                problem_statement=inst.problem_statement,
+                model=instance_result.model,
+                agent_type=model_config.agent_type,
+                generated_files=instance_result.generated_files,
+                stages=[s.to_dict() for s in instance_result.stages],
+                tool_calls=instance_result.tool_calls,
+                prompt=instance_result.prompt,
+            )
 
-        # Add extra metadata to trajectory
-        atif_traj.extra = atif_traj.extra or {}
-        atif_traj.extra.update({
-            "region": inst.region,
-            "expected_resources": inst.expected_resources,
-            "total_score": instance_result.total_score,
-            "total_time_seconds": time.time() - instance_start,
-            "model_config": model_config.to_dict(),
-        })
-        if instance_result.error:
-            atif_traj.extra["error"] = instance_result.error
+            # Add extra metadata to trajectory
+            atif_traj.extra = atif_traj.extra or {}
+            atif_traj.extra.update({
+                "region": inst.region,
+                "expected_resources": inst.expected_resources,
+                "total_score": instance_result.total_score,
+                "total_time_seconds": time.time() - instance_start,
+                "model_config": model_config.to_dict(),
+            })
+            if instance_result.error:
+                atif_traj.extra["error"] = instance_result.error
 
         # Save ATIF trajectory
         traj_path = instance_dir / f"{inst.instance_id}.traj.json"
@@ -162,6 +172,16 @@ def benchmark_command(
         None,
         "--reasoning-effort",
         help="Reasoning effort for reasoning models (low, medium, high) - enables extended thinking",
+    ),
+    multiturn: bool = typer.Option(
+        False,
+        "--multiturn",
+        help="Enable multiturn refinement: agent receives validation feedback and iterates",
+    ),
+    max_multiturn_iterations: int = typer.Option(
+        3,
+        "--max-multiturn-iterations",
+        help="Maximum multiturn refinement iterations (default: 3)",
     ),
     difficulty: Optional[str] = typer.Option(None, help="Filter by difficulty"),
     filter_provider: Optional[str] = typer.Option(None, "--provider", "-p", help="Filter by cloud provider"),
@@ -263,6 +283,8 @@ def benchmark_command(
         max_tool_iterations=max_tool_iterations,
         docs_index_path=docs_index_path,
         reasoning_effort=reasoning_effort,
+        multiturn=multiturn,
+        max_multiturn_iterations=max_multiturn_iterations,
     )
 
     # Validate backend choice

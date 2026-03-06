@@ -153,6 +153,36 @@ class ATIFTracer:
         )
         self.steps.append(step)
 
+    def add_system_step(
+        self,
+        message: str,
+        observation: Optional[str] = None,
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Add a system step (e.g., terraform execution results).
+
+        Args:
+            message: System message
+            observation: System observation/output
+            extra: Extra metadata for the step
+        """
+        atif_observation = None
+        if observation:
+            atif_observation = ObservationSchema(
+                results=[ObservationResultSchema(content=observation)]
+            )
+
+        step = StepObject(
+            step_id=len(self.steps) + 1,
+            timestamp=datetime.utcnow().isoformat() + "Z",
+            source="system",
+            message=message,
+            observation=atif_observation,
+            extra=extra,
+        )
+        self.steps.append(step)
+
     def from_terraform_trajectory(
         self,
         instance_id: str,

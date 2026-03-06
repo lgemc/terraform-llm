@@ -43,6 +43,8 @@ class ModelConfig:
     max_tool_iterations: int = 5  # Max iterations for tool-enabled agent
     docs_index_path: Optional[str] = None  # Path to hybrid search index for tool-enabled agent
     reasoning_effort: Optional[str] = None  # Reasoning effort: "low", "medium", "high" (for reasoning models)
+    multiturn: bool = False  # Enable multiturn refinement with validation feedback
+    max_multiturn_iterations: int = 3  # Maximum multiturn refinement iterations
 
     def to_dict(self) -> dict:
         """Convert to dictionary."""
@@ -54,6 +56,8 @@ class ModelConfig:
             "max_tool_iterations": self.max_tool_iterations,
             "docs_index_path": self.docs_index_path,
             "reasoning_effort": self.reasoning_effort,
+            "multiturn": self.multiturn,
+            "max_multiturn_iterations": self.max_multiturn_iterations,
         }
 
 
@@ -63,7 +67,9 @@ def generate_hcl(
     provider: str,
     region: str,
     hints: Optional[list[str]] = None,
-) -> tuple[dict[str, str], str]:
+    validation_feedback: Optional[str] = None,
+    messages: Optional[list[dict]] = None,
+) -> tuple[dict[str, str], str, list[dict]]:
     """
     Generate Terraform HCL from a problem statement.
 
@@ -73,28 +79,42 @@ def generate_hcl(
         provider: Cloud provider (e.g. "aws")
         region: Target region (e.g. "us-east-1")
         hints: Optional hints to include in the prompt
+        validation_feedback: Optional feedback from previous validation (for multiturn)
+        messages: Optional message history (for multiturn)
 
     Returns:
-        Tuple of (generated_files, prompt)
+        Tuple of (generated_files, prompt, messages)
         - generated_files: Dictionary mapping filenames to HCL content
         - prompt: The actual prompt sent to the LLM
+        - messages: The message history (for multiturn continuation)
     """
-    user_content = f"Provider: {provider}\nRegion: {region}\n\n{problem_statement}"
-    if hints:
-        user_content += "\n\nHints:\n" + "\n".join(f"- {h}" for h in hints)
+    # Initialize or use provided messages
+    if messages is None:
+        user_content = f"Provider: {provider}\nRegion: {region}\n\n{problem_statement}"
+        if hints:
+            user_content += "\n\nHints:\n" + "\n".join(f"- {h}" for h in hints)
+
+        messages = [
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_content},
+        ]
+    elif validation_feedback:
+        # Add validation feedback to existing messages for refinement
+        messages = list(messages)  # Copy to avoid mutating input
+        messages.append({
+            "role": "user",
+            "content": f"The previous Terraform configuration had issues. Please fix them:\n\n{validation_feedback}\n\nProvide an updated Terraform configuration that addresses these issues.",
+        })
 
     # Build full prompt for trace
-    full_prompt = f"System: {SYSTEM_PROMPT}\n\nUser: {user_content}"
+    full_prompt = "\n\n".join([f"{msg['role'].capitalize()}: {msg['content']}" for msg in messages])
 
-    logger.info(f"Generating HCL with model {config.model}")
+    logger.info(f"Generating HCL with model {config.model} (multiturn: {config.multiturn})")
 
     # Build completion kwargs
     completion_kwargs = {
         "model": config.model,
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": user_content},
-        ],
+        "messages": messages,
         "temperature": config.temperature,
         "max_tokens": config.max_tokens,
     }
@@ -113,7 +133,14 @@ def generate_hcl(
 
     response_text = response.choices[0].message.content
     logger.debug(f"LLM response length: {len(response_text)} chars")
-    return parse_hcl_response(response_text), full_prompt
+
+    # Add assistant response to messages
+    messages.append({
+        "role": "assistant",
+        "content": response_text,
+    })
+
+    return parse_hcl_response(response_text), full_prompt, messages
 
 
 def parse_hcl_response(response_text: str) -> dict[str, str]:

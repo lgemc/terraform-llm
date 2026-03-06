@@ -33,7 +33,7 @@ def generate_command(
 
     # Generate code
     try:
-        code = generate_hcl(
+        code, _, _ = generate_hcl(
             config=model_config,
             problem_statement=prompt,
             provider=cloud_provider,

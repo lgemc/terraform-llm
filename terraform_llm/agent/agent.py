@@ -9,6 +9,7 @@ from terraform_llm.agent.models import ModelConfig, generate_hcl
 from terraform_llm.agent.tool_agent import generate_hcl_with_tools
 from terraform_llm.agent.evaluator import EvalConfig, evaluate_instance
 from terraform_llm.agent.results import InstanceResult, BenchmarkReport
+from terraform_llm.tracing.atif_tracer import ATIFTracer
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,8 @@ def run_instance(
     """
     Run a single benchmark instance: generate HCL, then evaluate.
 
+    With multiturn enabled, the agent can iteratively refine based on validation feedback.
+
     Args:
         instance: Benchmark instance to evaluate
         model_config: LLM configuration
@@ -31,61 +34,206 @@ def run_instance(
         docker_env: Optional pre-created docker environment (for parallel execution)
 
     Returns:
-        InstanceResult with all stage scores
+        InstanceResult with all stage scores and ATIF trajectory
     """
     if eval_config is None:
         eval_config = EvalConfig()
 
     logger.info(f"Running instance {instance.instance_id} with model {model_config.model}")
 
+    # Initialize ATIF tracer to capture multi-turn trajectory
+    tracer = ATIFTracer(agent_version="1.0.0")
+    tracer.set_model(model_config.model, model_config.agent_type)
+    tracer.session_id = instance.instance_id  # Use instance_id instead of random UUID
+
+    # Step 1: Add initial user message
+    tracer.add_user_message(instance.problem_statement)
+
     # Step 1: Generate HCL from LLM
     agent_type_display = f"{model_config.model} ({model_config.agent_type})"
+    if model_config.multiturn:
+        agent_type_display += " [multiturn]"
     print(f"  Generating Terraform code with {agent_type_display}...")
+
     tool_call_trace = []
     prompt = None
-    try:
-        if model_config.agent_type == "tool-enabled":
-            generated_files, tool_call_trace, prompt = generate_hcl_with_tools(
+    messages = None
+    best_result = None
+    best_score = -1.0
+
+    # Multiturn loop (defaults to 1 iteration if multiturn is disabled)
+    max_iterations = model_config.max_multiturn_iterations if model_config.multiturn else 1
+
+    for iteration in range(max_iterations):
+        if model_config.multiturn and iteration > 0:
+            print(f"  Refinement iteration {iteration + 1}/{max_iterations}...")
+
+        try:
+            if model_config.agent_type == "tool-enabled":
+                generated_files, tool_call_trace, prompt = generate_hcl_with_tools(
+                    model=model_config.model,
+                    problem_statement=instance.problem_statement,
+                    provider=instance.provider,
+                    region=instance.region,
+                    hints=instance.hints,
+                    temperature=model_config.temperature,
+                    max_tokens=model_config.max_tokens,
+                    max_iterations=model_config.max_tool_iterations,
+                    docs_index_path=model_config.docs_index_path,
+                    reasoning_effort=model_config.reasoning_effort,
+                )
+            else:
+                # Simple agent
+                validation_feedback = None
+                if iteration > 0 and best_result:
+                    # Build feedback from previous evaluation
+                    validation_feedback = _build_validation_feedback(best_result)
+
+                generated_files, prompt, messages = generate_hcl(
+                    config=model_config,
+                    problem_statement=instance.problem_statement,
+                    provider=instance.provider,
+                    region=instance.region,
+                    hints=instance.hints,
+                    validation_feedback=validation_feedback,
+                    messages=messages,
+                )
+
+            if iteration == 0:
+                print(f"  Generated {len(generated_files)} file(s): {', '.join(generated_files.keys())}")
+
+            # Add agent generation step to trajectory
+            files_summary = "\n\n".join([
+                f"### {filename}\n```hcl\n{content[:500]}{'...' if len(content) > 500 else ''}\n```"
+                for filename, content in generated_files.items()
+            ])
+            iteration_suffix = f" (iteration {iteration + 1}/{max_iterations})" if model_config.multiturn and max_iterations > 1 else ""
+            tracer.add_agent_step(
+                message=f"Generated {len(generated_files)} Terraform file(s){iteration_suffix}:\n\n{files_summary}",
+                reasoning_content=prompt if prompt else None,
+            )
+
+        except Exception as e:
+            print(f"  Generation failed: {e}")
+            logger.error(f"LLM generation failed for {instance.instance_id}: {e}")
+
+            # Return best result so far if available
+            if best_result:
+                best_result.trajectory = tracer.to_trajectory(
+                    extra={
+                        "instance_id": instance.instance_id,
+                        "problem_statement": instance.problem_statement,
+                        "generated_files": best_result.generated_files,
+                        "region": instance.region,
+                        "expected_resources": instance.expected_resources,
+                        "total_score": best_result.total_score,
+                        "error": None,
+                    }
+                )
+                return best_result
+
+            result = InstanceResult(
+                instance_id=instance.instance_id,
                 model=model_config.model,
-                problem_statement=instance.problem_statement,
-                provider=instance.provider,
-                region=instance.region,
-                hints=instance.hints,
-                temperature=model_config.temperature,
-                max_tokens=model_config.max_tokens,
-                max_iterations=model_config.max_tool_iterations,
-                docs_index_path=model_config.docs_index_path,
-                reasoning_effort=model_config.reasoning_effort,
+                error=f"Generation failed: {e}",
             )
-        else:
-            # Default: simple agent
-            generated_files, prompt = generate_hcl(
-                config=model_config,
-                problem_statement=instance.problem_statement,
-                provider=instance.provider,
-                region=instance.region,
-                hints=instance.hints,
+            result.trajectory = tracer.to_trajectory(
+                extra={
+                    "instance_id": instance.instance_id,
+                    "problem_statement": instance.problem_statement,
+                    "generated_files": {},
+                    "region": instance.region,
+                    "expected_resources": instance.expected_resources,
+                    "total_score": 0.0,
+                    "error": str(e),
+                }
             )
-        print(f"  Generated {len(generated_files)} file(s): {', '.join(generated_files.keys())}")
-    except Exception as e:
-        print(f"  Generation failed: {e}")
-        logger.error(f"LLM generation failed for {instance.instance_id}: {e}")
-        return InstanceResult(
-            instance_id=instance.instance_id,
-            model=model_config.model,
-            error=f"Generation failed: {e}",
-        )
+            return result
 
-    # Step 2: Evaluate generated HCL
-    print("  Evaluating generated code...")
-    result = evaluate_instance(instance, generated_files, eval_config, work_dir=work_dir, docker_env=docker_env)
-    result.model = model_config.model
-    result.tool_calls = tool_call_trace  # Attach tool call trace
-    result.prompt = prompt  # Attach the prompt
-    result.compute_total_score()
+        # Step 2: Evaluate generated HCL
+        if iteration == 0:
+            print("  Evaluating generated code...")
 
-    logger.info(f"Instance {instance.instance_id} score: {result.total_score:.2f}")
-    return result
+        result = evaluate_instance(instance, generated_files, eval_config, work_dir=work_dir, docker_env=docker_env)
+        result.model = model_config.model
+        result.tool_calls = tool_call_trace
+        result.prompt = prompt
+        result.compute_total_score()
+
+        # Add evaluation stages to trajectory as system steps
+        for stage in result.stages:
+            tracer.add_system_step(
+                message=f"Terraform {stage.stage}: {stage.message}",
+                observation=stage.raw_output if stage.raw_output else None,
+                extra={
+                    "stage": stage.stage,
+                    "status": stage.status.value,
+                    "score": stage.score,
+                    "duration_seconds": stage.duration_seconds,
+                    "details": stage.details if stage.details else None,
+                    "message": stage.message,
+                    "iteration": iteration + 1,
+                },
+            )
+
+        # Track best result
+        if result.total_score > best_score:
+            best_score = result.total_score
+            best_result = result
+
+        # Early exit if perfect score or multiturn disabled
+        if not model_config.multiturn or result.total_score >= 1.0:
+            logger.info(f"Instance {instance.instance_id} score: {result.total_score:.2f}")
+            result.trajectory = tracer.to_trajectory(
+                extra={
+                    "instance_id": instance.instance_id,
+                    "problem_statement": instance.problem_statement,
+                    "generated_files": result.generated_files,
+                    "region": instance.region,
+                    "expected_resources": instance.expected_resources,
+                    "total_score": result.total_score,
+                    "best_score": best_score,
+                    "iterations": iteration + 1,
+                }
+            )
+            return result
+
+        # Add refinement feedback as user message for next iteration
+        feedback = _build_validation_feedback(result)
+        tracer.add_user_message(f"The previous Terraform configuration had issues. Please fix them:\n\n{feedback}")
+
+        # Continue to next iteration with feedback
+        print(f"    Score: {result.total_score:.2f} - attempting refinement...")
+
+    # Return best result after all iterations
+    logger.info(f"Instance {instance.instance_id} final score: {best_result.total_score:.2f} (best of {max_iterations} iterations)")
+    best_result.trajectory = tracer.to_trajectory(
+        extra={
+            "instance_id": instance.instance_id,
+            "problem_statement": instance.problem_statement,
+            "generated_files": best_result.generated_files,
+            "region": instance.region,
+            "expected_resources": instance.expected_resources,
+            "total_score": best_result.total_score,
+            "best_score": best_score,
+            "iterations": max_iterations,
+        }
+    )
+    return best_result
+
+
+def _build_validation_feedback(result: InstanceResult) -> str:
+    """Build feedback message from evaluation result."""
+    feedback_parts = []
+
+    for stage in result.stages:
+        if stage.status.value == "failed":
+            feedback_parts.append(f"- {stage.stage} failed: {stage.raw_output[:500]}")
+
+    if not feedback_parts:
+        feedback_parts.append("Previous attempt had issues. Please review and improve the configuration.")
+
+    return "\n".join(feedback_parts)
 
 
 def run_benchmark(

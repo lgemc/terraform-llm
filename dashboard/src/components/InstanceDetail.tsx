@@ -1,10 +1,11 @@
 import type { InstanceResult } from '../types'
 import { StageTimeline } from './StageTimeline'
 import { CodeViewer } from './CodeViewer'
+import { IterationTimeline } from './IterationTimeline'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { ScrollArea } from '@/components/ui/scroll-area'
-import { Clock, Cpu, AlertTriangle } from 'lucide-react'
+import { Clock, Cpu, AlertTriangle, RotateCw } from 'lucide-react'
 
 interface Props {
   instance: InstanceResult
@@ -31,6 +32,11 @@ export function InstanceDetail({ instance }: Props) {
               Score: <Badge className={scoreColor(instance.total_score)}>
                 {(instance.total_score * 100).toFixed(1)}%
               </Badge>
+              {instance.best_score !== undefined && instance.best_score !== instance.total_score && (
+                <span className="text-xs text-muted-foreground">
+                  (best: {(instance.best_score * 100).toFixed(1)}%)
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-1">
               <Clock className="h-3.5 w-3.5" />
@@ -40,6 +46,12 @@ export function InstanceDetail({ instance }: Props) {
               <Cpu className="h-3.5 w-3.5" />
               {instance.model}
             </div>
+            {instance.num_iterations && instance.num_iterations > 1 && (
+              <div className="flex items-center gap-1">
+                <RotateCw className="h-3.5 w-3.5" />
+                {instance.num_iterations} iterations
+              </div>
+            )}
           </div>
         </div>
 
@@ -77,10 +89,20 @@ export function InstanceDetail({ instance }: Props) {
           </Card>
         )}
 
+        {/* Iteration Timeline (Multi-turn) */}
+        {instance.iterations && instance.iterations.length > 0 && (
+          <div>
+            <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
+              Multi-turn Refinement ({instance.iterations.length} iteration{instance.iterations.length > 1 ? 's' : ''})
+            </h3>
+            <IterationTimeline iterations={instance.iterations} />
+          </div>
+        )}
+
         {/* Stage Timeline */}
         <div>
           <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3">
-            Pipeline Stages
+            Pipeline Stages {instance.iterations && instance.iterations.length > 0 ? '(All Iterations)' : ''}
           </h3>
           <StageTimeline stages={instance.stages} />
         </div>

@@ -6,7 +6,6 @@ from terraform_llm.cli.benchmark import benchmark_command
 from terraform_llm.cli.generate import generate_command
 from terraform_llm.cli.list import list_command
 from terraform_llm.cli.traces import traces_app
-from terraform_llm.cli.leaderboard import leaderboard_command
 from terraform_llm.cli.datasets import datasets_app
 from terraform_llm.cli.index_docs import index_docs_command
 from terraform_llm.cli.rag import rag_command
@@ -17,7 +16,6 @@ app = typer.Typer(help="Terraform Agent Benchmark - AI agent evaluation framewor
 app.command(name="benchmark")(benchmark_command)
 app.command(name="generate")(generate_command)
 app.command(name="list")(list_command)
-app.command(name="leaderboard")(leaderboard_command)
 app.command(name="index-docs")(index_docs_command)
 app.command(name="rag")(rag_command)
 

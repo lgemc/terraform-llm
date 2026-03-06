@@ -59,6 +59,7 @@ class InstanceResult:
     error: Optional[str] = None
     tool_calls: List[Dict[str, Any]] = field(default_factory=list)  # Track tool calls (RAG searches, etc.)
     prompt: Optional[str] = None  # The actual prompt sent to the LLM
+    trajectory: Optional[Any] = None  # ATIF trajectory object (if generated)
 
     # Stages that are excluded from scoring (infrastructure setup, not model quality)
     _UNSCORED_STAGES = {"setup_script", "cleanup_script", "destroy"}
