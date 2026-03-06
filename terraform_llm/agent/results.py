@@ -68,8 +68,6 @@ class InstanceResult:
         total_weight = 0.0
         weighted_sum = 0.0
         for stage in self.stages:
-            if stage.status == StageStatus.SKIPPED:
-                continue
             if stage.stage in self._UNSCORED_STAGES:
                 continue
             w = STAGE_WEIGHTS.get(stage.stage, 0.1)
