@@ -1,6 +1,7 @@
 """LLM abstraction using litellm."""
 
 import re
+import os
 import logging
 from typing import Optional
 from dataclasses import dataclass
@@ -15,12 +16,12 @@ SYSTEM_PROMPT = (
     "Rules:\n"
     "- Output ONLY valid Terraform HCL code\n"
     "- Include all necessary provider and resource blocks\n"
-    "- Use the specified provider and region\n"
+    "- Use the specified provider and region from the problem statement\n"
     "- Do not include explanations outside of HCL comments\n"
     "- If multiple files are needed, separate them with: # --- filename: <name>.tf ---\n\n"
-    "IMPORTANT: Always include a provider block with these settings for LocalStack/Moto compatibility:\n"
+    "IMPORTANT: For AWS provider, include these LocalStack/Moto compatibility settings:\n"
     "provider \"aws\" {\n"
-    "  region                      = var.region or \"us-east-1\"\n"
+    "  region                      = \"us-east-1\"  # Use the region specified in the problem statement\n"
     "  s3_use_path_style           = true\n"
     "  skip_credentials_validation = true\n"
     "  skip_requesting_account_id  = true\n"
@@ -97,6 +98,11 @@ def generate_hcl(
         "temperature": config.temperature,
         "max_tokens": config.max_tokens,
     }
+
+    # Add custom api_base from environment if set (for vLLM/custom OpenAI-compatible endpoints)
+    if os.getenv("OPENAI_API_BASE"):
+        completion_kwargs["api_base"] = os.getenv("OPENAI_API_BASE")
+        logger.info(f"Using custom API base: {os.getenv('OPENAI_API_BASE')}")
 
     # Add reasoning effort for reasoning models (DeepSeek R1, o1, Claude 3.7+, gpt-oss)
     if config.reasoning_effort:

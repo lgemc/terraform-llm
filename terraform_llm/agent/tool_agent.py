@@ -275,6 +275,14 @@ def generate_hcl_with_tools(
             "max_tokens": max_tokens,
         }
 
+        # Add custom api_base from environment if set (for vLLM/custom OpenAI-compatible endpoints)
+        import os
+        if os.getenv("OPENAI_API_BASE") and iteration == 0:
+            completion_kwargs["api_base"] = os.getenv("OPENAI_API_BASE")
+            logger.info(f"Using custom API base: {os.getenv('OPENAI_API_BASE')}")
+        elif os.getenv("OPENAI_API_BASE"):
+            completion_kwargs["api_base"] = os.getenv("OPENAI_API_BASE")
+
         # Add reasoning effort for reasoning models
         if reasoning_effort:
             completion_kwargs["reasoning_effort"] = reasoning_effort
