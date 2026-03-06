@@ -226,12 +226,22 @@ def _build_validation_feedback(result: InstanceResult) -> str:
     """Build feedback message from evaluation result."""
     feedback_parts = []
 
+    # Include generated files so LLM can see what it wrote
+    if result.generated_files:
+        feedback_parts.append("## Generated Files\n")
+        for filename, content in result.generated_files.items():
+            feedback_parts.append(f"### {filename}\n```hcl\n{content}\n```\n")
+
+    # Include error messages from failed stages
+    feedback_parts.append("## Errors\n")
+    has_errors = False
     for stage in result.stages:
         if stage.status.value == "failed":
             # Include full output (up to 3000 chars) to capture complete diagnostics
-            feedback_parts.append(f"- {stage.stage} failed: {stage.raw_output[:3000]}")
+            feedback_parts.append(f"**{stage.stage} failed:**\n```\n{stage.raw_output[:3000]}\n```\n")
+            has_errors = True
 
-    if not feedback_parts:
+    if not has_errors:
         feedback_parts.append("Previous attempt had issues. Please review and improve the configuration.")
 
     return "\n".join(feedback_parts)
