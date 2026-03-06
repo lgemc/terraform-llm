@@ -1,0 +1,45 @@
+# Default configuration for terraform-agent benchmarks
+# Override with experiment-specific configs or CLI arguments
+
+# Dataset configuration
+dataset: dataset/
+instance_id: null  # Run specific instance by ID (null = run all)
+difficulty: null  # Filter by difficulty (easy, medium, hard)
+provider: null  # Filter by cloud provider (aws, azure, gcp)
+tags: null  # Filter by tags (list)
+limit: null  # Limit number of instances
+
+# Output configuration
+output_dir: output
+
+# Model configuration
+model:
+  model: anthropic/claude-3-5-sonnet-20241022
+  temperature: 0.0
+  max_tokens: 16384
+  agent_type: simple  # simple or tool-enabled
+  max_tool_iterations: 5
+  docs_index_path: null
+  reasoning_effort: null  # low, medium, high (for reasoning models)
+  multiturn: false
+  max_multiturn_iterations: 3
+
+# Evaluation configuration
+eval:
+  run_apply: true
+  run_destroy: true
+  run_validation: true
+  init_timeout: 120
+  plan_timeout: 300
+  apply_timeout: 600
+  use_docker: true
+  backend: localstack  # localstack or moto
+  terraform_image: hashicorp/terraform:latest
+  localstack_image: localstack/localstack:latest
+  moto_image: motoserver/moto:latest
+
+# Execution configuration
+execution:
+  parallel: 3  # Number of parallel workers
+  skip_generation: false  # Skip code generation, reuse existing .tf files
+  verbose: false

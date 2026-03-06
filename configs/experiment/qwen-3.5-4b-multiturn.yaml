@@ -1,0 +1,39 @@
+# @package _global_
+
+# Experiment: Qwen 3.5 4B with multiturn refinement
+# Usage: uv run python -m terraform_llm.cli benchmark --config-name experiment/qwen-3.5-4b-multiturn
+
+# Model configuration
+model:
+  model: openai/Qwen/Qwen3.5-4B
+  temperature: 0.0
+  max_tokens: 16384
+  agent_type: simple  # Change to tool-enabled if needed
+  max_tool_iterations: 5
+  docs_index_path: output/tf_index/
+  reasoning_effort: null
+  multiturn: true
+  max_multiturn_iterations: 3
+
+# Evaluation configuration
+eval:
+  run_apply: true
+  run_destroy: true
+  run_validation: true
+  use_docker: true
+  backend: moto
+  terraform_image: hashicorp/terraform:latest
+  localstack_image: localstack/localstack:latest
+  moto_image: motoserver/moto:latest
+
+# Execution configuration
+execution:
+  parallel: 5
+  skip_generation: false
+  verbose: false
+
+# Output configuration
+output_dir: output/qwen-3.5:4b-multiturn-3
+
+# Environment variables (set these before running):
+# export OPENAI_API_BASE="http://192.168.0.9:8000/v1"
