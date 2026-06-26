@@ -13,6 +13,7 @@ from terraform_llm.datasets.loader import (
     load_dataset
 )
 from terraform_llm.datasets.dataset import Dataset
+from terraform_llm.datasets.iac_eval import load_iac_eval
 
 __all__ = [
     'BenchmarkInstance',
@@ -24,4 +25,5 @@ __all__ = [
     'save_dataset',
     'create_instance',
     'load_dataset',
+    'load_iac_eval',
 ]
